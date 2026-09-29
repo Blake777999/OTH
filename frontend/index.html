@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Old Town Hours — Scheduling System</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
+</head>
+<body>
+
+  <!-- Top App Navigation -->
+  <header class="app-header">
+    <div class="header-container">
+      <div class="logo-area">
+        <div class="logo-icon">OT</div>
+        <div>
+          <div class="logo-title">Old Town Hours</div>
+          <div style="font-size: 0.75rem; color: var(--gray-500); font-weight: 500;">9:00 AM – 9:00 PM Daily Coverage</div>
+        </div>
+        <div class="house-tags">
+          <span class="badge-burn">🔥 Burn House</span>
+          <span class="badge-thc">🌿 THC House</span>
+        </div>
+      </div>
+
+      <!-- Week Selector -->
+      <div class="week-nav">
+        <button id="btn-prev-week" title="Previous Week">&larr; Prev</button>
+        <span class="week-label" id="current-week-label">Week ...</span>
+        <button id="btn-next-week" title="Next Week">Next &rarr;</button>
+        <button id="btn-current-week" class="btn-sm" style="margin-left: 0.25rem;">This Week</button>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <nav class="nav-tabs">
+        <button class="tab-btn active" data-tab="tab-schedule">
+          <span>📅</span> Weekly Schedule
+        </button>
+        <button class="tab-btn" data-tab="tab-master">
+          <span>🎨</span> Master Schedule
+        </button>
+        <button class="tab-btn" data-tab="tab-overrides">
+          <span>⚡</span> Weekly Exceptions
+        </button>
+        <button class="tab-btn" data-tab="tab-roster">
+          <span>👥</span> Group Roster
+        </button>
+        <button class="tab-btn" data-tab="tab-sheets">
+          <span>📊</span> Google Sheets
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Main View Container -->
+  <main class="main-container">
+
+    <!-- ==================== TAB 1: WEEKLY SCHEDULE VIEW ==================== -->
+    <section id="tab-schedule" class="view-section active">
+      <!-- Action Bar -->
+      <div class="action-bar">
+        <div class="action-group">
+          <button id="btn-open-generate" class="btn btn-primary">
+            <span>⚡</span> Generate Optimal Schedule
+          </button>
+          <button id="btn-copy-sheets" class="btn btn-secondary" title="Copy tab-delimited schedule ready to paste into Google Sheets">
+            <span>📋</span> Copy for Google Sheets
+          </button>
+          <a id="btn-download-csv" href="#" class="btn btn-secondary" title="Download CSV file">
+            <span>📥</span> Download CSV
+          </a>
+          <button id="btn-quick-sync-sheets" class="btn btn-success" style="display: none;">
+            <span>🟢</span> Sync to Google Sheet
+          </button>
+        </div>
+
+        <div class="action-group">
+          <label style="font-size: 0.85rem; font-weight: 600; color: var(--gray-600);">Filter:</label>
+          <select id="house-filter" class="btn btn-secondary" style="padding: 0.4rem 0.6rem;">
+            <option value="all">Both Houses (Burn & THC)</option>
+            <option value="Burn">Burn House Only</option>
+            <option value="THC">THC House Only</option>
+          </select>
+          <select id="member-filter" class="btn btn-secondary" style="padding: 0.4rem 0.6rem;">
+            <option value="all">Highlight: All Members</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Live Metrics Cards -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <span class="metric-title">Coverage Status</span>
+          <span class="metric-value" id="metric-coverage">100%</span>
+          <span class="metric-subtitle" id="metric-coverage-sub">336 / 336 slots (168h)</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-title">Fairness Score</span>
+          <span class="metric-value" id="metric-fairness">--</span>
+          <span class="metric-subtitle" id="metric-fairness-sub">Target: ~14.0 hrs/person</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-title">Repeat Consistency</span>
+          <span class="metric-value" id="metric-repeat">--</span>
+          <span class="metric-subtitle" id="metric-repeat-sub">Same times as prior week</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-title">Active Roster</span>
+          <span class="metric-value" id="metric-members">12</span>
+          <span class="metric-subtitle">Equal weighting</span>
+        </div>
+      </div>
+
+      <!-- Schedule Table Card -->
+      <div class="schedule-container">
+        <div class="schedule-header">
+          <div>
+            <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--gray-900);">
+              Schedule Matrix — <span id="schedule-dates-sub">Monday – Sunday</span>
+            </h3>
+            <p style="font-size: 0.775rem; color: var(--gray-500);">
+              Hover or click on any slot to view details or manually reassign.
+            </p>
+          </div>
+          <div style="display: flex; gap: 0.5rem; align-items: center; font-size: 0.8rem;">
+            <span style="display: inline-flex; align-items: center; gap: 0.3rem;">
+              <span style="width: 12px; height: 12px; background: #ea580c; border-radius: 3px;"></span> Burn
+            </span>
+            <span style="display: inline-flex; align-items: center; gap: 0.3rem; margin-left: 0.5rem;">
+              <span style="width: 12px; height: 12px; background: #059669; border-radius: 3px;"></span> THC
+            </span>
+          </div>
+        </div>
+
+        <div class="schedule-scroll-wrapper">
+          <table class="schedule-table" id="schedule-grid-table">
+            <thead>
+              <tr id="schedule-days-header">
+                <th class="th-time" rowspan="2">Time</th>
+                <!-- Day headers injected via JS -->
+              </tr>
+              <tr class="subheaders" id="schedule-subheaders">
+                <!-- Burn / THC injected via JS -->
+              </tr>
+            </thead>
+            <tbody id="schedule-grid-tbody">
+              <!-- 24 time slot rows injected via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Hours & Fairness Breakdown Table -->
+      <div style="margin-top: 2rem;">
+        <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 0.75rem; color: var(--gray-900);">
+          Member Hours & Fairness Summary
+        </h3>
+        <table class="data-table" id="summary-table">
+          <thead>
+            <tr>
+              <th>Member</th>
+              <th>Assigned Hours</th>
+              <th>Target</th>
+              <th>Diff</th>
+              <th>🔥 Burn Hours</th>
+              <th>🌿 THC Hours</th>
+              <th>Days Worked</th>
+              <th>Shifts</th>
+              <th>Avg Shift</th>
+              <th>Shift Preference</th>
+            </tr>
+          </thead>
+          <tbody id="summary-table-tbody">
+            <!-- Summary rows injected via JS -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 2: MASTER SCHEDULE PAINTER ==================== -->
+    <section id="tab-master" class="view-section">
+      <div class="action-bar">
+        <div class="action-group">
+          <label style="font-weight: 600; font-size: 0.9rem;">Select Member:</label>
+          <select id="master-member-select" class="btn btn-secondary" style="padding: 0.4rem 0.8rem; font-weight: 600; min-width: 180px;">
+            <!-- Members injected via JS -->
+          </select>
+
+          <span style="border-left: 1px solid var(--gray-300); height: 24px; margin: 0 0.5rem;"></span>
+
+          <label style="font-weight: 600; font-size: 0.85rem;">Shift Preference:</label>
+          <div class="action-group" style="gap: 0.5rem;">
+            <label style="font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
+              <input type="radio" name="master-pref" value="daily_short" id="pref-daily">
+              <span>~2 Hours Everyday</span>
+            </label>
+            <label style="font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem; cursor: pointer; margin-left: 0.5rem;">
+              <input type="radio" name="master-pref" value="fewer_long" id="pref-longer">
+              <span>Fewer Days (3–5h shifts)</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="action-group">
+          <button id="btn-save-master" class="btn btn-primary">
+            <span>💾</span> Save Master Schedule
+          </button>
+          <button id="btn-clear-master" class="btn btn-secondary">
+            <span>🧹</span> Clear All Busy
+          </button>
+        </div>
+      </div>
+
+      <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.85rem; color: #1e40af;">
+        ℹ️ <strong>Master Schedule Instructions:</strong> Click and drag across slots to paint recurring weekly commitments (classes, labs, recurring club meetings). Slots marked in <strong style="color: #991b1b;">RED</strong> mean this member is never available at those times.
+      </div>
+
+      <div class="schedule-container">
+        <div class="schedule-scroll-wrapper">
+          <table class="schedule-table painter-grid" id="master-painter-table">
+            <thead>
+              <tr>
+                <th class="th-time">Time</th>
+                <th>Monday</th>
+                <th>Tuesday</th>
+                <th>Wednesday</th>
+                <th>Thursday</th>
+                <th>Friday</th>
+                <th>Saturday</th>
+                <th>Sunday</th>
+              </tr>
+            </thead>
+            <tbody id="master-painter-tbody">
+              <!-- Painter cells injected via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 3: WEEKLY EXCEPTIONS / OVERRIDES ==================== -->
+    <section id="tab-overrides" class="view-section">
+      <div class="action-bar">
+        <div class="action-group">
+          <label style="font-weight: 600; font-size: 0.9rem;">Select Member:</label>
+          <select id="override-member-select" class="btn btn-secondary" style="padding: 0.4rem 0.8rem; font-weight: 600; min-width: 180px;">
+            <!-- Members injected via JS -->
+          </select>
+          <span style="font-size: 0.85rem; color: var(--gray-600); font-weight: 600;">
+            for <span id="override-week-badge" class="badge-burn" style="background: var(--gray-100); color: var(--gray-800); border-color: var(--gray-300);">Week ...</span>
+          </span>
+        </div>
+
+        <div class="action-group">
+          <button id="btn-save-overrides" class="btn btn-primary">
+            <span>💾</span> Save Weekly Exceptions
+          </button>
+          <button id="btn-clear-overrides" class="btn btn-secondary">
+            <span>🧹</span> Clear Exceptions
+          </button>
+        </div>
+      </div>
+
+      <div style="background: #fef3c7; border: 1px solid #fde68a; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.85rem; color: #92400e;">
+        ⚡ <strong>Weekly Exception Instructions:</strong> Mark one-off conflicts (e.g. exams, doctor visits, travel) for this specific week only. They take precedence over the master schedule.
+      </div>
+
+      <div class="schedule-container">
+        <div class="schedule-scroll-wrapper">
+          <table class="schedule-table painter-grid" id="override-painter-table">
+            <thead>
+              <tr id="override-days-header">
+                <th class="th-time">Time</th>
+                <!-- Headers injected via JS with dates -->
+              </tr>
+            </thead>
+            <tbody id="override-painter-tbody">
+              <!-- Override cells injected via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 4: GROUP ROSTER & PREFERENCES ==================== -->
+    <section id="tab-roster" class="view-section">
+      <div class="action-bar">
+        <div>
+          <h3 style="font-size: 1.1rem; font-weight: 700;">Group Members & Shift Preferences</h3>
+          <p style="font-size: 0.8rem; color: var(--gray-500);">
+            Currently 12 active members (14 hours each). Jared is ready to be activated as the 13th member (~13 hours each).
+          </p>
+        </div>
+        <button id="btn-add-member" class="btn btn-primary">
+          <span>➕</span> Add New Member
+        </button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem;" id="roster-cards-container">
+        <!-- Member cards injected via JS -->
+      </div>
+    </section>
+
+    <!-- ==================== TAB 5: GOOGLE SHEETS SYNC ==================== -->
+    <section id="tab-sheets" class="view-section">
+      <div class="action-bar">
+        <div>
+          <h3 style="font-size: 1.1rem; font-weight: 700;">Google Sheets Integration & Weekly Sync</h3>
+          <p style="font-size: 0.8rem; color: var(--gray-500);">
+            View the live schedule in Google Sheets, auto-sync weekly, or copy-paste directly.
+          </p>
+        </div>
+        <div class="action-group">
+          <button id="btn-save-sheet-config" class="btn btn-primary">
+            <span>💾</span> Save Settings
+          </button>
+          <button id="btn-trigger-sync" class="btn btn-success">
+            <span>🚀</span> Sync Week Now
+          </button>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+        <!-- Configuration Card -->
+        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 1.5rem; box-shadow: var(--card-shadow);">
+          <h4 style="font-size: 1rem; font-weight: 700; margin-bottom: 1rem; color: var(--gray-900);">Google Sheet Connection</h4>
+
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Google Spreadsheet ID:</label>
+            <input type="text" id="sheets-spreadsheet-id" placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms" style="width: 100%; padding: 0.6rem; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 0.85rem; font-family: monospace;">
+            <small style="color: var(--gray-500); font-size: 0.75rem; display: block; margin-top: 0.25rem;">
+              Found in your sheet URL: https://docs.google.com/spreadsheets/d/<strong>YOUR_SPREADSHEET_ID</strong>/edit
+            </small>
+          </div>
+
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Service Account Credentials JSON:</label>
+            <textarea id="sheets-sa-json" rows="6" placeholder='Paste your Google Cloud Service Account JSON key here...' style="width: 100%; padding: 0.6rem; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 0.8rem; font-family: monospace;"></textarea>
+            <div id="credentials-status-badge" style="margin-top: 0.35rem; font-size: 0.8rem; font-weight: 600;">
+              Status: Not configured
+            </div>
+          </div>
+
+          <div style="margin-bottom: 1.25rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; cursor: pointer; font-weight: 600;">
+              <input type="checkbox" id="sheets-auto-sync">
+              <span>Automatically sync to Google Sheet every time a new schedule is generated</span>
+            </label>
+          </div>
+
+          <div id="sheet-link-area" style="display: none; padding: 0.75rem; background: var(--thc-bg); border: 1px solid var(--thc-border); border-radius: 8px; font-size: 0.85rem;">
+            🔗 <strong>Live Spreadsheet:</strong> <a id="sheet-open-link" href="#" target="_blank" style="color: var(--thc-color); font-weight: 700; text-decoration: underline;">Open Google Sheet in new tab &rarr;</a>
+          </div>
+        </div>
+
+        <!-- Zero-Setup Quick Export Card -->
+        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 1.5rem; box-shadow: var(--card-shadow);">
+          <h4 style="font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--gray-900);">⚡ Zero-Setup Instant Paste</h4>
+          <p style="font-size: 0.85rem; color: var(--gray-600); margin-bottom: 1rem;">
+            Don't have Google Cloud API credentials set up yet? No problem! Use our 1-click clipboard formatter:
+          </p>
+
+          <ol style="font-size: 0.85rem; color: var(--gray-700); padding-left: 1.25rem; margin-bottom: 1.25rem; display: flex; flex-direction: column; gap: 0.5rem;">
+            <li>Click <strong>"Copy for Google Sheets"</strong> below.</li>
+            <li>Open any Google Sheet in your browser.</li>
+            <li>Click cell <strong>A1</strong> and press <strong>Ctrl + V</strong> (or Cmd + V).</li>
+            <li>The full 7-day schedule with Burn & THC columns and time slots pastes perfectly formatted!</li>
+          </ol>
+
+          <div style="display: flex; gap: 0.75rem;">
+            <button id="btn-copy-sheets-tab" class="btn btn-primary">
+              <span>📋</span> Copy Formatted Schedule
+            </button>
+            <a id="btn-download-csv-tab" href="#" class="btn btn-secondary">
+              <span>📥</span> Download CSV
+            </a>
+          </div>
+
+          <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid var(--gray-200);">
+
+          <h5 style="font-size: 0.9rem; font-weight: 700; margin-bottom: 0.5rem;">How to set up Direct Google Sync (Optional):</h5>
+          <ol style="font-size: 0.8rem; color: var(--gray-600); padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.35rem;">
+            <li>In Google Cloud Console, enable the <strong>Google Sheets API</strong>.</li>
+            <li>Create a Service Account and download its JSON key.</li>
+            <li>Share your Google Sheet with the service account's client email (Editor access).</li>
+            <li>Paste your Spreadsheet ID and JSON key on the left, then click Save!</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Modal: Generate Schedule -->
+  <div id="modal-generate" class="modal-backdrop" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">⚡ Generate Optimal Schedule</h3>
+        <button class="modal-close" id="modal-gen-close">&times;</button>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 1rem; font-size: 0.9rem;">
+        <div>
+          <label style="display: block; font-weight: 600; margin-bottom: 0.35rem;">Target Week:</label>
+          <input type="text" id="gen-week-id" readonly style="width: 100%; padding: 0.5rem; background: var(--gray-100); border: 1px solid var(--gray-300); border-radius: 6px; font-weight: 600;">
+        </div>
+
+        <div>
+          <label style="display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer;">
+            <input type="checkbox" id="gen-repeat-consistency" checked style="margin-top: 0.25rem;">
+            <div>
+              <span style="font-weight: 600;">Prioritize Repeat-Week Consistency</span>
+              <p style="font-size: 0.8rem; color: var(--gray-500);">
+                Gives members the same time slots as the previous week (even if swapped between Burn and THC houses).
+              </p>
+            </div>
+          </label>
+        </div>
+
+        <div>
+          <label style="display: block; font-weight: 600; margin-bottom: 0.35rem;">Minimum Shift Duration:</label>
+          <select id="gen-min-shift" style="width: 100%; padding: 0.5rem; border: 1px solid var(--gray-300); border-radius: 6px;">
+            <option value="1.0">1.0 Hour (2 slots) — Recommended</option>
+            <option value="1.5">1.5 Hours (3 slots)</option>
+            <option value="2.0">2.0 Hours (4 slots)</option>
+            <option value="0.5">0.5 Hours (1 slot) — Unconstrained</option>
+          </select>
+          <small style="color: var(--gray-500); font-size: 0.75rem;">Prevents fragmented shifts and ensures reasonable block lengths.</small>
+        </div>
+
+        <div style="background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 8px; padding: 0.75rem;">
+          <div style="font-size: 0.8rem; font-weight: 600; color: var(--gray-700); margin-bottom: 0.25rem;">Optimization Objectives:</div>
+          <ul style="font-size: 0.775rem; color: var(--gray-600); padding-left: 1.25rem;">
+            <li>Exact staffing: 1 person at Burn + 1 person at THC from 9am to 9pm (168h total).</li>
+            <li>Equal hours: ~14.0 hrs/person across active members.</li>
+            <li>Respect master schedule busy times & weekly overrides.</li>
+            <li>Honor shift preferences: ~2h daily vs fewer longer blocks.</li>
+          </ul>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem;">
+          <button id="btn-cancel-gen" class="btn btn-secondary">Cancel</button>
+          <button id="btn-run-gen" class="btn btn-primary">
+            <span>🚀</span> Run Optimizer
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Edit Member -->
+  <div id="modal-member" class="modal-backdrop" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title" id="member-modal-title">Member Details</h3>
+        <button class="modal-close" id="modal-member-close">&times;</button>
+      </div>
+
+      <form id="member-form" style="display: flex; flex-direction: column; gap: 1rem; font-size: 0.9rem;">
+        <input type="hidden" id="edit-member-id">
+
+        <div>
+          <label style="display: block; font-weight: 600; margin-bottom: 0.35rem;">Full Name:</label>
+          <input type="text" id="edit-member-name" required style="width: 100%; padding: 0.5rem; border: 1px solid var(--gray-300); border-radius: 6px;">
+        </div>
+
+        <div>
+          <label style="display: block; font-weight: 600; margin-bottom: 0.35rem;">Email (Optional):</label>
+          <input type="email" id="edit-member-email" style="width: 100%; padding: 0.5rem; border: 1px solid var(--gray-300); border-radius: 6px;">
+        </div>
+
+        <div>
+          <label style="display: block; font-weight: 600; margin-bottom: 0.35rem;">Shift Style Preference:</label>
+          <select id="edit-member-pref" style="width: 100%; padding: 0.5rem; border: 1px solid var(--gray-300); border-radius: 6px;">
+            <option value="daily_short">~2 Hours Everyday (Spread out over 6–7 days)</option>
+            <option value="fewer_long">Fewer Days, Longer Shifts (3–5 hours over 3–4 days)</option>
+          </select>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div>
+            <label style="display: block; font-weight: 600; margin-bottom: 0.35rem;">Weight / Share:</label>
+            <input type="number" id="edit-member-weight" step="0.1" min="0.1" max="2.0" value="1.0" style="width: 100%; padding: 0.5rem; border: 1px solid var(--gray-300); border-radius: 6px;">
+            <small style="color: var(--gray-500); font-size: 0.75rem;">1.0 = equal share</small>
+          </div>
+
+          <div>
+            <label style="display: block; font-weight: 600; margin-bottom: 0.35rem;">Badge Color:</label>
+            <input type="color" id="edit-member-color" value="#2563EB" style="width: 100%; height: 38px; padding: 2px; border: 1px solid var(--gray-300); border-radius: 6px; cursor: pointer;">
+          </div>
+        </div>
+
+        <div>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: 600;">
+            <input type="checkbox" id="edit-member-active" checked>
+            <span>Active in Scheduling Roster</span>
+          </label>
+          <small style="color: var(--gray-500); font-size: 0.75rem; display: block; margin-top: 0.25rem;">
+            Uncheck to temporarily exclude from scheduling (e.g. inactive or future member).
+          </small>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.75rem;">
+          <button type="button" id="btn-delete-member" class="btn btn-secondary" style="color: var(--danger); border-color: #fca5a5;">
+            Delete
+          </button>
+          <div style="display: flex; gap: 0.5rem;">
+            <button type="button" id="btn-cancel-member" class="btn btn-secondary">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Member</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
