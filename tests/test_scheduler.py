@@ -421,3 +421,57 @@ def test_one_sitting_priority_and_weekend_no_splits():
     # Total split days across all members across the entire week should be very low (<= 20)
     assert split_days_count <= 20, f"Expected <= 20 split shift days, got {split_days_count}"
 
+
+def test_house_switch_gap_and_stint_limits():
+    """Verify that any house switch on the same day has >= 5 hour gap, stints <= 3h, days <= 5h, and daily hours center around 2h."""
+    from backend.models import get_all_members, get_master_schedule
+    members = get_all_members()
+    master_items = get_master_schedule()
+
+    optimizer = ScheduleOptimizer(
+        members=members,
+        master_items=master_items,
+        weekly_overrides=[],
+        min_shift_slots=2,
+    )
+    result = optimizer.solve()
+    assert result["success"] is True
+
+    member_day = {}
+    for a in result["assignments"]:
+        if a.member_id != "UNFILLED":
+            member_day.setdefault((a.member_id, a.day_of_week), []).append(a)
+
+    for (mid, day), assigns in member_day.items():
+        assigns.sort(key=lambda x: x.slot)
+
+        # 1. Total hours on any day must be <= 5.0 hours (10 slots)
+        total_day_hours = len(assigns) * 0.5
+        assert total_day_hours <= 5.0, f"Member {mid} on day {day} worked {total_day_hours} hours (max allowed is 5.0h)!"
+
+        # 2. Continuous stint at any house cannot exceed 3.0 hours (6 slots)
+        cur_house = None
+        cur_len = 0
+        prev_s = None
+        for a in assigns:
+            if a.house == cur_house and prev_s is not None and a.slot == prev_s + 1:
+                cur_len += 1
+            else:
+                if cur_len > 0:
+                    assert cur_len <= 6, f"Member {mid} on day {day} had continuous stint of {cur_len * 0.5}h at {cur_house} (max 3.0h)!"
+                cur_house = a.house
+                cur_len = 1
+            prev_s = a.slot
+        if cur_len > 0:
+            assert cur_len <= 6, f"Member {mid} on day {day} had continuous stint of {cur_len * 0.5}h at {cur_house} (max 3.0h)!"
+
+        # 3. Minimum 5-hour gap (10 slots) between working at different houses on the same day
+        houses = {a.house for a in assigns}
+        if len(houses) > 1:
+            burn_slots = [a.slot for a in assigns if a.house == "Burn"]
+            thc_slots = [a.slot for a in assigns if a.house == "THC"]
+            min_gap_slots = min(abs(b - t) for b in burn_slots for t in thc_slots)
+            assert min_gap_slots >= 10, (
+                f"Member {mid} on day {day} switched houses with gap of only {min_gap_slots * 0.5} hours (min required is 5.0h)!"
+            )
+

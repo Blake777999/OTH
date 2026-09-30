@@ -26,7 +26,7 @@ class ScheduleOptimizer:
         weekly_overrides: List[WeeklyOverrideItem],
         previous_schedule: Optional[List[ScheduleSlotAssignment]] = None,
         min_shift_slots: int = 2,  # Minimum 1 hour (2 thirty-minute slots)
-        max_daily_slots: int = 12, # Max 6 hours in a single day
+        max_daily_slots: int = 10, # Max 5 hours in a single day
         time_limit_seconds: float = 25.0,
     ):
         self.members = [m for m in members if m.active]
@@ -238,13 +238,32 @@ class ScheduleOptimizer:
                         for s in range(1, self.slots - 1):
                             model.Add(x[m, d, s, h] <= x[m, d, s - 1, h] + x[m, d, s + 1, h])
 
-        # 6. House Switching Prevention:
-        # Strictly forbid switching houses mid-continuous-shift (e.g. Burn 30m -> THC 30m -> Burn 30m)
+                    # Max continuous stint at any house <= 6 slots (3 hours)
+                    for h in range(self.num_houses):
+                        for s in range(self.slots - 6):
+                            model.Add(sum(x[m, d, s + k, h] for k in range(7)) <= 6)
+
+        # 6. House Switching Rules & Separation:
+        # Rule A: Minimum 5-hour gap (10 slots) between working at different houses on the same day!
+        # If member is at House 0 at s1, they cannot be at House 1 at any s2 within 9 slots (4.5h).
         for m in range(self.num_members):
             for d in range(self.days):
-                for s in range(1, self.slots):
-                    model.Add(x[m, d, s - 1, 0] + x[m, d, s, 1] <= 1)
-                    model.Add(x[m, d, s - 1, 1] + x[m, d, s, 0] <= 1)
+                for s1 in range(self.slots):
+                    for s2 in range(s1 + 1, min(self.slots, s1 + 10)):
+                        model.Add(x[m, d, s1, 0] + x[m, d, s2, 1] <= 1)
+                        model.Add(x[m, d, s1, 1] + x[m, d, s2, 0] <= 1)
+
+        # Rule B: Heavily disincentivize working at two houses on the same day at all
+        house_switch_penalties = []
+        for m in range(self.num_members):
+            for d in range(self.days):
+                w_burn = model.NewBoolVar(f"w_burn_{m}_{d}")
+                w_thc = model.NewBoolVar(f"w_thc_{m}_{d}")
+                model.Add(sum(x[m, d, s, 0] for s in range(self.slots)) <= self.slots * w_burn)
+                model.Add(sum(x[m, d, s, 1] for s in range(self.slots)) <= self.slots * w_thc)
+                both_houses = model.NewBoolVar(f"both_h_{m}_{d}")
+                model.Add(w_burn + w_thc - 1 <= both_houses)
+                house_switch_penalties.append(-350 * both_houses)
 
         # 6.5 One-Sitting Priority (Avoid Leaving and Coming Back in One Day):
         # We track shift starts for each member on each day.
@@ -296,15 +315,22 @@ class ScheduleOptimizer:
                 weight = 50 if prev_m_idx in members_with_exceptions else 300
                 repeat_reward_terms.append(weight * is_working[prev_m_idx, d, s])
 
-        # 8. Shift Preferences:
+        # 8. Shift Preferences & Daily 2-Hour Target:
         # Daily indicator: works_day[m, d]
         preference_terms = []
+        daily_target_penalties = []
         for m_idx, member in enumerate(self.members):
             for d in range(self.days):
                 day_slots = sum(x[m_idx, d, s, h] for s in range(self.slots) for h in range(self.num_houses))
                 works_day = model.NewBoolVar(f"works_day_{m_idx}_{d}")
-                model.Add(day_slots <= self.max_daily_slots)
+                model.Add(day_slots <= self.max_daily_slots) # 10 slots = 5 hours max
                 model.Add(day_slots <= self.slots * works_day)
+
+                # Penalize deviation from 4 slots (2 hours) when working
+                dev_2h = model.NewIntVar(0, self.max_daily_slots, f"dev2h_{m_idx}_{d}")
+                model.Add(dev_2h >= day_slots - 4)
+                model.Add(dev_2h >= 4 * works_day - day_slots)
+                daily_target_penalties.append(-20 * dev_2h)
 
                 if member.shift_preference == "daily_short":
                     # Prefers ~2 hours (4 slots) everyday
@@ -330,8 +356,10 @@ class ScheduleOptimizer:
         # Total Objective Function
         objective = (
             sum(unfilled_penalties)
+            + sum(house_switch_penalties)
             + sum(repeat_reward_terms)
             + sum(preference_terms)
+            + sum(daily_target_penalties)
             + sum(split_shift_penalties)
         )
         model.Maximize(objective)
@@ -464,8 +492,32 @@ class ScheduleOptimizer:
                     model.Add(x[m, d, s - 1, 1] + x[m, d, s, 0] <= 1)
 
         fallback_split_penalties = []
+        fallback_switch_penalties = []
         for m in range(self.num_members):
             for d in range(self.days):
+                # Daily max hours cap
+                day_slots = sum(x[m, d, s, h] for s in range(self.slots) for h in range(self.num_houses))
+                model.Add(day_slots <= self.max_daily_slots)
+
+                # Max continuous stint at any house <= 6 slots (3 hours)
+                for h in range(self.num_houses):
+                    for s in range(self.slots - 6):
+                        model.Add(sum(x[m, d, s + k, h] for k in range(7)) <= 6)
+
+                # Minimum 5-hour gap between houses
+                for s1 in range(self.slots):
+                    for s2 in range(s1 + 1, min(self.slots, s1 + 10)):
+                        model.Add(x[m, d, s1, 0] + x[m, d, s2, 1] <= 1)
+                        model.Add(x[m, d, s1, 1] + x[m, d, s2, 0] <= 1)
+
+                w_burn = model.NewBoolVar(f"rel_wb_{m}_{d}")
+                w_thc = model.NewBoolVar(f"rel_wt_{m}_{d}")
+                model.Add(sum(x[m, d, s, 0] for s in range(self.slots)) <= self.slots * w_burn)
+                model.Add(sum(x[m, d, s, 1] for s in range(self.slots)) <= self.slots * w_thc)
+                both_houses = model.NewBoolVar(f"rel_both_{m}_{d}")
+                model.Add(w_burn + w_thc - 1 <= both_houses)
+                fallback_switch_penalties.append(150 * both_houses)
+
                 starts = []
                 s0 = model.NewBoolVar(f"rel_st_{m}_{d}_0")
                 model.Add(s0 == rel_is_working[m, d, 0])
@@ -506,7 +558,7 @@ class ScheduleOptimizer:
             model.AddAbsEquality(abs_diff, diff)
             dev_terms.append(abs_diff)
 
-        model.Minimize(sum(dev_terms) + sum(unfilled_penalties) + sum(fallback_split_penalties))
+        model.Minimize(sum(dev_terms) + sum(unfilled_penalties) + sum(fallback_split_penalties) + sum(fallback_switch_penalties))
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.time_limit_seconds
         status = solver.Solve(model)
