@@ -370,3 +370,54 @@ def test_no_isolated_30min_house_stints_or_ping_pongs():
                     f"Member {m_id} on day {day} had an isolated 30-min stint of {current_run} slot(s) at {current_house} ending at slot {prev_s}"
                 )
 
+
+def test_one_sitting_priority_and_weekend_no_splits():
+    """Verify that people receive their time in one sitting: strictly 0 weekend split shifts, and cap <= 2 on weekdays."""
+    from backend.models import get_all_members, get_master_schedule
+    members = get_all_members()
+    master_items = get_master_schedule()
+
+    optimizer = ScheduleOptimizer(
+        members=members,
+        master_items=master_items,
+        weekly_overrides=[],
+        min_shift_slots=2,
+    )
+    result = optimizer.solve()
+    assert result["success"] is True
+
+    # Group assignments by (member_id, day_of_week)
+    member_day_slots = {}
+    for a in result["assignments"]:
+        if a.member_id != "UNFILLED":
+            member_day_slots.setdefault((a.member_id, a.day_of_week), []).append(a.slot)
+
+    split_days_count = 0
+    weekend_splits = 0
+
+    for (m_id, day), slots in member_day_slots.items():
+        slots.sort()
+        # Count continuous sittings
+        sittings = 0
+        prev = None
+        for s in slots:
+            if prev is None or s != prev + 1:
+                sittings += 1
+            prev = s
+
+        # On weekends (Saturday=5, Sunday=6): strictly at most 1 sitting (0 split shifts!)
+        if day in (5, 6):
+            assert sittings <= 1, f"Member {m_id} had {sittings} sittings on weekend day {day} (expected <= 1)!"
+            if sittings > 1:
+                weekend_splits += 1
+
+        # On weekdays (0..4): at most 2 sittings (no 3rd or 4th shift)
+        assert sittings <= 2, f"Member {m_id} had {sittings} sittings on weekday {day} (expected <= 2)!"
+
+        if sittings > 1:
+            split_days_count += 1
+
+    assert weekend_splits == 0
+    # Total split days across all members across the entire week should be very low (<= 20)
+    assert split_days_count <= 20, f"Expected <= 20 split shift days, got {split_days_count}"
+

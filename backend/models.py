@@ -361,9 +361,11 @@ def get_schedule(week_id: str) -> List[ScheduleSlotAssignment]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT s.day_of_week, s.slot, s.house, s.member_id, m.name as member_name, m.color
+        SELECT s.day_of_week, s.slot, s.house, s.member_id,
+               COALESCE(m.name, '❌ X (UNFILLED)') as member_name,
+               COALESCE(m.color, '#DC2626') as color
         FROM schedules s
-        JOIN members m ON s.member_id = m.id
+        LEFT JOIN members m ON s.member_id = m.id
         WHERE s.week_id = ?
         ORDER BY s.day_of_week, s.slot, s.house
     """, (week_id,))

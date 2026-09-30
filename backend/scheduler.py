@@ -27,7 +27,7 @@ class ScheduleOptimizer:
         previous_schedule: Optional[List[ScheduleSlotAssignment]] = None,
         min_shift_slots: int = 2,  # Minimum 1 hour (2 thirty-minute slots)
         max_daily_slots: int = 12, # Max 6 hours in a single day
-        time_limit_seconds: float = 12.0,
+        time_limit_seconds: float = 25.0,
     ):
         self.members = [m for m in members if m.active]
         self.num_members = len(self.members)
@@ -246,6 +246,31 @@ class ScheduleOptimizer:
                     model.Add(x[m, d, s - 1, 0] + x[m, d, s, 1] <= 1)
                     model.Add(x[m, d, s - 1, 1] + x[m, d, s, 0] <= 1)
 
+        # 6.5 One-Sitting Priority (Avoid Leaving and Coming Back in One Day):
+        # We track shift starts for each member on each day.
+        # Weekends (Sat, Sun): Strictly at most 1 continuous sitting (no split shifts at all).
+        # Weekdays (Mon-Fri): Cap at 2 sittings max (strictly forbids 3rd or 4th shift) and heavily penalize 2nd shift.
+        split_shift_penalties = []
+        for m in range(self.num_members):
+            for d in range(self.days):
+                starts = []
+                s0 = model.NewBoolVar(f"st_{m}_{d}_0")
+                model.Add(s0 == is_working[m, d, 0])
+                starts.append(s0)
+                for s in range(1, self.slots):
+                    st = model.NewBoolVar(f"st_{m}_{d}_{s}")
+                    model.Add(st >= is_working[m, d, s] - is_working[m, d, s - 1])
+                    starts.append(st)
+
+                num_starts = sum(starts)
+                if d in (5, 6):  # Saturday & Sunday: strictly at most 1 continuous sitting
+                    model.Add(num_starts <= 1)
+                else:  # Weekdays: cap at 2 and heavily penalize split shifts
+                    model.Add(num_starts <= 2)
+                    sec_shift = model.NewIntVar(0, 1, f"sec_sh_{m}_{d}")
+                    model.Add(sec_shift >= num_starts - 1)
+                    split_shift_penalties.append(-250 * sec_shift)
+
         # 7. Repeat Consistency Across Weeks:
         # Prioritize giving people the same times every week even if at different houses!
         # If people have weekly exceptions, their repeat consistency is sacrificed first,
@@ -292,11 +317,22 @@ class ScheduleOptimizer:
                     # Prefers fewer days, longer shifts (e.g. 3-5 hours = 6-10 slots)
                     preference_terms.append(-15 * works_day)
 
+        # Warm-start hints from previous schedule if available
+        if self.previous_schedule:
+            for prev in self.previous_schedule:
+                prev_m_idx = self.member_id_to_idx.get(prev.member_id)
+                h_idx = self.houses.index(prev.house) if prev.house in self.houses else None
+                if prev_m_idx is not None and h_idx is not None:
+                    if 0 <= prev.day_of_week < self.days and 0 <= prev.slot < self.slots:
+                        if avail[(prev_m_idx, prev.day_of_week, prev.slot)]:
+                            model.AddHint(x[prev_m_idx, prev.day_of_week, prev.slot, h_idx], 1)
+
         # Total Objective Function
         objective = (
             sum(unfilled_penalties)
             + sum(repeat_reward_terms)
             + sum(preference_terms)
+            + sum(split_shift_penalties)
         )
         model.Maximize(objective)
 
@@ -409,6 +445,13 @@ class ScheduleOptimizer:
                             model.Add(x[m, d, s, h] == 0)
 
         # Anti-fragmentation per house and forbid adjacent house switching in fallback
+        rel_is_working = {}
+        for m in range(self.num_members):
+            for d in range(self.days):
+                for s in range(self.slots):
+                    rel_is_working[m, d, s] = model.NewBoolVar(f"rel_work_{m}_{d}_{s}")
+                    model.Add(rel_is_working[m, d, s] == sum(x[m, d, s, h] for h in range(self.num_houses)))
+
         for m in range(self.num_members):
             for d in range(self.days):
                 for h in range(self.num_houses):
@@ -419,6 +462,22 @@ class ScheduleOptimizer:
                 for s in range(1, self.slots):
                     model.Add(x[m, d, s - 1, 0] + x[m, d, s, 1] <= 1)
                     model.Add(x[m, d, s - 1, 1] + x[m, d, s, 0] <= 1)
+
+        fallback_split_penalties = []
+        for m in range(self.num_members):
+            for d in range(self.days):
+                starts = []
+                s0 = model.NewBoolVar(f"rel_st_{m}_{d}_0")
+                model.Add(s0 == rel_is_working[m, d, 0])
+                starts.append(s0)
+                for s in range(1, self.slots):
+                    st = model.NewBoolVar(f"rel_st_{m}_{d}_{s}")
+                    model.Add(st >= rel_is_working[m, d, s] - rel_is_working[m, d, s - 1])
+                    starts.append(st)
+                num_starts = sum(starts)
+                sec_shift = model.NewIntVar(0, self.slots, f"rel_sec_{m}_{d}")
+                model.Add(sec_shift >= num_starts - 1)
+                fallback_split_penalties.append(100 * sec_shift)
 
         # Strictly bounded fair share in fallback solver
         unavoidable_unfilled = 0
@@ -447,7 +506,7 @@ class ScheduleOptimizer:
             model.AddAbsEquality(abs_diff, diff)
             dev_terms.append(abs_diff)
 
-        model.Minimize(sum(dev_terms) + sum(unfilled_penalties))
+        model.Minimize(sum(dev_terms) + sum(unfilled_penalties) + sum(fallback_split_penalties))
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.time_limit_seconds
         status = solver.Solve(model)
