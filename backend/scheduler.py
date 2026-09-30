@@ -225,23 +225,26 @@ class ScheduleOptimizer:
         if self.min_shift_slots >= 2:
             for m in range(self.num_members):
                 for d in range(self.days):
-                    # Day boundaries cannot be single 30-min isolated shifts
+                    # Overall working shift cannot be single 30-min isolated shifts
                     model.Add(is_working[m, d, 0] <= is_working[m, d, 1])
                     model.Add(is_working[m, d, self.slots - 1] <= is_working[m, d, self.slots - 2])
-                    # Interior slots cannot be single 30-min isolated shifts
                     for s in range(1, self.slots - 1):
                         model.Add(is_working[m, d, s] <= is_working[m, d, s - 1] + is_working[m, d, s + 1])
 
-        # 6. House Switching Penalties:
-        # Discourage switching houses mid-continuous-shift
-        continuity_terms = []
+                    # Stint at any specific house cannot be single 30-min isolated shifts
+                    for h in range(self.num_houses):
+                        model.Add(x[m, d, 0, h] <= x[m, d, 1, h])
+                        model.Add(x[m, d, self.slots - 1, h] <= x[m, d, self.slots - 2, h])
+                        for s in range(1, self.slots - 1):
+                            model.Add(x[m, d, s, h] <= x[m, d, s - 1, h] + x[m, d, s + 1, h])
+
+        # 6. House Switching Prevention:
+        # Strictly forbid switching houses mid-continuous-shift (e.g. Burn 30m -> THC 30m -> Burn 30m)
         for m in range(self.num_members):
             for d in range(self.days):
                 for s in range(1, self.slots):
-                    switch_house = model.NewBoolVar(f"sw_h_{m}_{d}_{s}")
-                    model.Add(switch_house >= x[m, d, s - 1, 0] + x[m, d, s, 1] - 1)
-                    model.Add(switch_house >= x[m, d, s - 1, 1] + x[m, d, s, 0] - 1)
-                    continuity_terms.append(-20 * switch_house)
+                    model.Add(x[m, d, s - 1, 0] + x[m, d, s, 1] <= 1)
+                    model.Add(x[m, d, s - 1, 1] + x[m, d, s, 0] <= 1)
 
         # 7. Repeat Consistency Across Weeks:
         # Prioritize giving people the same times every week even if at different houses!
@@ -294,7 +297,6 @@ class ScheduleOptimizer:
             sum(unfilled_penalties)
             + sum(repeat_reward_terms)
             + sum(preference_terms)
-            + sum(continuity_terms)
         )
         model.Maximize(objective)
 
@@ -405,6 +407,18 @@ class ScheduleOptimizer:
                     if not avail[(m, d, s)]:
                         for h in range(self.num_houses):
                             model.Add(x[m, d, s, h] == 0)
+
+        # Anti-fragmentation per house and forbid adjacent house switching in fallback
+        for m in range(self.num_members):
+            for d in range(self.days):
+                for h in range(self.num_houses):
+                    model.Add(x[m, d, 0, h] <= x[m, d, 1, h])
+                    model.Add(x[m, d, self.slots - 1, h] <= x[m, d, self.slots - 2, h])
+                    for s in range(1, self.slots - 1):
+                        model.Add(x[m, d, s, h] <= x[m, d, s - 1, h] + x[m, d, s + 1, h])
+                for s in range(1, self.slots):
+                    model.Add(x[m, d, s - 1, 0] + x[m, d, s, 1] <= 1)
+                    model.Add(x[m, d, s - 1, 1] + x[m, d, s, 0] <= 1)
 
         # Strictly bounded fair share in fallback solver
         unavoidable_unfilled = 0

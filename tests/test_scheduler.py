@@ -298,3 +298,75 @@ def test_single_free_person_given_to_thc():
         # Burn must be UNFILLED
         assert slot_assigns["Burn"].member_id == "UNFILLED", f"Expected Burn to be UNFILLED for slot {slot}, got {slot_assigns['Burn'].member_id}"
 
+
+def test_no_isolated_30min_house_stints_or_ping_pongs():
+    """Verify that someone is never assigned to one house for 30m, another for 30m, and back,
+
+    and that every stint at any house is at least 1 hour (2 slots) with no adjacent house switching.
+    """
+    members = create_sample_members(12)
+    # Week 1
+    opt1 = ScheduleOptimizer(members=members, master_items=[], weekly_overrides=[], min_shift_slots=2)
+    res1 = opt1.solve()
+    assert res1["success"] is True
+
+    # Week 2 with repeat consistency and overrides
+    overrides = [
+        WeeklyOverrideItem(
+            week_id="2026-W44",
+            member_id="m_2",
+            day_of_week=2,
+            start_slot=4,
+            end_slot=10,
+            override_type="busy",
+        )
+    ]
+    opt2 = ScheduleOptimizer(
+        members=members,
+        master_items=[],
+        weekly_overrides=overrides,
+        previous_schedule=res1["assignments"],
+        min_shift_slots=2,
+    )
+    res2 = opt2.solve()
+    assert res2["success"] is True
+
+    for result in [res1, res2]:
+        # Group by member and day
+        member_day_shifts = {}
+        for a in result["assignments"]:
+            if a.member_id != "UNFILLED":
+                member_day_shifts.setdefault((a.member_id, a.day_of_week), {})[a.slot] = a.house
+
+        for (m_id, day), slot_map in member_day_shifts.items():
+            slots = sorted(slot_map.keys())
+            for i in range(len(slots) - 1):
+                s1, s2 = slots[i], slots[i + 1]
+                # If slots are adjacent, they CANNOT switch houses!
+                if s2 == s1 + 1:
+                    assert slot_map[s1] == slot_map[s2], (
+                        f"Member {m_id} on day {day} switched houses in adjacent slots: "
+                        f"slot {s1} ({slot_map[s1]}) -> slot {s2} ({slot_map[s2]})"
+                    )
+
+            # Verify every continuous block at a given house has length >= 2 slots
+            current_house = None
+            current_run = 0
+            prev_s = None
+            for s in slots:
+                h = slot_map[s]
+                if prev_s is None or s != prev_s + 1 or h != current_house:
+                    if current_run > 0:
+                        assert current_run >= 2, (
+                            f"Member {m_id} on day {day} had an isolated 30-min stint of {current_run} slot(s) at {current_house} ending at slot {prev_s}"
+                        )
+                    current_house = h
+                    current_run = 1
+                else:
+                    current_run += 1
+                prev_s = s
+            if current_run > 0:
+                assert current_run >= 2, (
+                    f"Member {m_id} on day {day} had an isolated 30-min stint of {current_run} slot(s) at {current_house} ending at slot {prev_s}"
+                )
+
