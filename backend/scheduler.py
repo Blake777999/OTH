@@ -70,7 +70,8 @@ class ScheduleOptimizer:
                 for s in range(max(0, item.start_slot), min(self.slots, item.end_slot)):
                     avail[(m_idx, d, s)] = False
 
-        # Apply Weekly Overrides
+        # Apply Weekly Overrides (additional busy)
+        # Rule: Nobody can be assigned when they are busy in EITHER master OR weekly!
         for item in self.weekly_overrides:
             m_idx = self.member_id_to_idx.get(item.member_id)
             if m_idx is None:
@@ -80,8 +81,6 @@ class ScheduleOptimizer:
                 for s in range(max(0, item.start_slot), min(self.slots, item.end_slot)):
                     if item.override_type == "busy":
                         avail[(m_idx, d, s)] = False
-                    elif item.override_type == "available":
-                        avail[(m_idx, d, s)] = True
 
         return avail
 
@@ -124,11 +123,28 @@ class ScheduleOptimizer:
                     is_working[m, d, s] = model.NewBoolVar(f"work_{m}_{d}_{s}")
                     model.Add(is_working[m, d, s] == sum(x[m, d, s, h] for h in range(self.num_houses)))
 
-        # 1. Coverage Constraint: Exactly 1 person at each house for each slot
+        # 1. Coverage Constraint: Each house at each slot must be filled by a member,
+        # or marked as unfilled with an 'X' if no member is available due to conflicts.
+        unfilled = {}
+        unfilled_penalties = []
+        burn_idx = self.houses.index("Burn") if "Burn" in self.houses else 0
+        thc_idx = self.houses.index("THC") if "THC" in self.houses else 1
+
         for d in range(self.days):
             for s in range(self.slots):
                 for h in range(self.num_houses):
-                    model.Add(sum(x[m, d, s, h] for m in range(self.num_members)) == 1)
+                    unf = model.NewBoolVar(f"unf_{d}_{s}_{h}")
+                    unfilled[d, s, h] = unf
+                    model.Add(sum(x[m, d, s, h] for m in range(self.num_members)) + unf == 1)
+                    # THC has higher filling priority than Burn (-105000 vs -100000)
+                    penalty_weight = -105000 if h == thc_idx else -100000
+                    unfilled_penalties.append(penalty_weight * unf)
+
+                # If only one person is free for a given slot, give them to THC (Burn cannot be staffed)
+                avail_at_slot = sum(1 for m in range(self.num_members) if avail[(m, d, s)])
+                if avail_at_slot == 1:
+                    for m in range(self.num_members):
+                        model.Add(x[m, d, s, burn_idx] == 0)
 
         # 2. No Double Booking: At most 1 house per person at any slot
         for m in range(self.num_members):
@@ -145,6 +161,15 @@ class ScheduleOptimizer:
                             model.Add(x[m, d, s, h] == 0)
 
         # 4. Target Hours & Fairness Calculation:
+        # Calculate unavoidable unfilled slots (where fewer than num_houses members are available)
+        unavoidable_unfilled = 0
+        for d in range(self.days):
+            for s in range(self.slots):
+                avail_at_slot = sum(1 for m in range(self.num_members) if avail[(m, d, s)])
+                if avail_at_slot < self.num_houses:
+                    unavoidable_unfilled += (self.num_houses - avail_at_slot)
+
+        effective_demand = max(0, self.total_demand_slots - unavoidable_unfilled)
         total_weight = sum(m.weight for m in self.members)
         if total_weight <= 0:
             total_weight = float(self.num_members)
@@ -155,8 +180,8 @@ class ScheduleOptimizer:
             avail_count[m_idx] = sum(1 for d in range(self.days) for s in range(self.slots) if avail[(m_idx, d, s)])
 
         target_slots = {}
-        fair_floor = self.total_demand_slots // self.num_members
-        fair_ceil = (self.total_demand_slots + self.num_members - 1) // self.num_members
+        fair_floor = effective_demand // self.num_members
+        fair_ceil = (effective_demand + self.num_members - 1) // self.num_members
 
         member_total_slots = {}
         slack_pos = {}
@@ -170,17 +195,17 @@ class ScheduleOptimizer:
 
             if all(abs(m.weight - 1.0) < 1e-4 for m in self.members):
                 # Standard equal weighting
-                t = round(self.total_demand_slots / self.num_members)
+                t = round(effective_demand / self.num_members)
                 t_min = fair_floor
                 t_max = fair_ceil
             else:
-                t = round(self.total_demand_slots * (member.weight / total_weight))
+                t = round(effective_demand * (member.weight / total_weight))
                 t_min = max(0, t - 1)
-                t_max = min(self.total_demand_slots, t + 1)
+                t_max = min(effective_demand, t + 1)
 
             target_slots[m_idx] = t
 
-            # If member has plenty of availability, enforce fair bounds strictly
+            # If member has plenty of availability, enforce fair bounds
             if avail_count[m_idx] >= t_min:
                 model.Add(member_total_slots[m_idx] >= min(t_min, avail_count[m_idx]))
                 model.Add(member_total_slots[m_idx] <= t_max)
@@ -220,6 +245,8 @@ class ScheduleOptimizer:
 
         # 7. Repeat Consistency Across Weeks:
         # Prioritize giving people the same times every week even if at different houses!
+        # If people have weekly exceptions, their repeat consistency is sacrificed first,
+        # protecting the steady repeat times of members who had NO weekly exceptions!
         repeat_reward_terms = []
         prev_work_set = set()
         for prev in self.previous_schedule:
@@ -227,10 +254,19 @@ class ScheduleOptimizer:
             if prev_m_idx is not None:
                 prev_work_set.add((prev_m_idx, prev.day_of_week, prev.slot))
 
+        # Identify members who submitted weekly exceptions for this week
+        members_with_exceptions = set()
+        for item in self.weekly_overrides:
+            m_idx = self.member_id_to_idx.get(item.member_id)
+            if m_idx is not None and item.override_type == "busy":
+                members_with_exceptions.add(m_idx)
+
         for (prev_m_idx, d, s) in prev_work_set:
             if 0 <= d < self.days and 0 <= s < self.slots:
-                # Big reward for repeating the same slot (working at either Burn or THC)
-                repeat_reward_terms.append(150 * is_working[prev_m_idx, d, s])
+                # Members with NO weekly exceptions are strongly protected: high reward (300).
+                # Members who submitted weekly exceptions have their repeat times sacrificed first: lower reward (50).
+                weight = 50 if prev_m_idx in members_with_exceptions else 300
+                repeat_reward_terms.append(weight * is_working[prev_m_idx, d, s])
 
         # 8. Shift Preferences:
         # Daily indicator: works_day[m, d]
@@ -255,7 +291,8 @@ class ScheduleOptimizer:
 
         # Total Objective Function
         objective = (
-            sum(repeat_reward_terms)
+            sum(unfilled_penalties)
+            + sum(repeat_reward_terms)
             + sum(preference_terms)
             + sum(continuity_terms)
         )
@@ -266,7 +303,6 @@ class ScheduleOptimizer:
         solver.parameters.max_time_in_seconds = self.time_limit_seconds
         solver.parameters.num_workers = 4
         status = solver.Solve(model)
-        print(f"Primary solver status: {solver.StatusName(status)}, WallTime: {solver.WallTime()}")
 
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             # If constrained too tightly (e.g. strict min shift or strict availability), try fallback relaxation
@@ -274,32 +310,61 @@ class ScheduleOptimizer:
 
         # Extract Results
         assignments = []
+        unfilled_count = 0
+        unfilled_details = []
         for d in range(self.days):
             for s in range(self.slots):
                 for h_idx, house in enumerate(self.houses):
+                    assigned_m = None
                     for m_idx in range(self.num_members):
                         if solver.Value(x[m_idx, d, s, h_idx]) == 1:
-                            member = self.idx_to_member[m_idx]
-                            assignments.append(
-                                ScheduleSlotAssignment(
-                                    day_of_week=d,
-                                    slot=s,
-                                    house=house,
-                                    member_id=member.id,
-                                    member_name=member.name,
-                                    color=member.color,
-                                )
+                            assigned_m = m_idx
+                            break
+
+                    if assigned_m is not None:
+                        member = self.idx_to_member[assigned_m]
+                        assignments.append(
+                            ScheduleSlotAssignment(
+                                day_of_week=d,
+                                slot=s,
+                                house=house,
+                                member_id=member.id,
+                                member_name=member.name,
+                                color=member.color,
                             )
+                        )
+                    else:
+                        # Slot cannot be filled due to conflicts - mark with X!
+                        unfilled_count += 1
+                        time_label = slot_to_time_str(s)
+                        day_name = DAYS_OF_WEEK[d]
+                        unfilled_details.append(f"{day_name} {time_label} ({house})")
+                        assignments.append(
+                            ScheduleSlotAssignment(
+                                day_of_week=d,
+                                slot=s,
+                                house=house,
+                                member_id="UNFILLED",
+                                member_name="❌ X (UNFILLED)",
+                                color="#DC2626",
+                            )
+                        )
 
         # Compute Statistics
         stats = self._compute_stats(assignments, prev_work_set, target_slots)
+        warnings = []
+        if unfilled_count > 0:
+            preview = ", ".join(unfilled_details[:4])
+            if len(unfilled_details) > 4:
+                preview += f" (+{len(unfilled_details) - 4} more)"
+            warnings.append(f"{unfilled_count} slot(s) could not be filled due to everyone being busy: {preview}")
 
         return {
             "success": True,
             "status": solver.StatusName(status),
             "assignments": assignments,
             "stats": stats,
-            "warnings": [],
+            "warnings": warnings,
         }
 
     def _solve_relaxed_fallback(self, avail) -> Dict[str, Any]:
@@ -312,10 +377,26 @@ class ScheduleOptimizer:
                     for h in range(self.num_houses):
                         x[m, d, s, h] = model.NewBoolVar(f"rel_x_{m}_{d}_{s}_{h}")
 
+        unfilled = {}
+        unfilled_penalties = []
+        burn_idx = self.houses.index("Burn") if "Burn" in self.houses else 0
+        thc_idx = self.houses.index("THC") if "THC" in self.houses else 1
+
         for d in range(self.days):
             for s in range(self.slots):
                 for h in range(self.num_houses):
-                    model.Add(sum(x[m, d, s, h] for m in range(self.num_members)) == 1)
+                    unf = model.NewBoolVar(f"rel_unf_{d}_{s}_{h}")
+                    unfilled[d, s, h] = unf
+                    model.Add(sum(x[m, d, s, h] for m in range(self.num_members)) + unf == 1)
+                    # THC has higher penalty to leave unfilled in fallback (Minimize objective)
+                    penalty_weight = 105000 if h == thc_idx else 100000
+                    unfilled_penalties.append(penalty_weight * unf)
+
+                # If only one person is free for a given slot, give them to THC
+                avail_at_slot = sum(1 for m in range(self.num_members) if avail[(m, d, s)])
+                if avail_at_slot == 1:
+                    for m in range(self.num_members):
+                        model.Add(x[m, d, s, burn_idx] == 0)
 
         for m in range(self.num_members):
             for d in range(self.days):
@@ -326,8 +407,16 @@ class ScheduleOptimizer:
                             model.Add(x[m, d, s, h] == 0)
 
         # Strictly bounded fair share in fallback solver
-        fair_floor = self.total_demand_slots // self.num_members
-        fair_ceil = (self.total_demand_slots + self.num_members - 1) // self.num_members
+        unavoidable_unfilled = 0
+        for d in range(self.days):
+            for s in range(self.slots):
+                avail_at_slot = sum(1 for m in range(self.num_members) if avail[(m, d, s)])
+                if avail_at_slot < self.num_houses:
+                    unavoidable_unfilled += (self.num_houses - avail_at_slot)
+
+        effective_demand = max(0, self.total_demand_slots - unavoidable_unfilled)
+        fair_floor = effective_demand // self.num_members
+        fair_ceil = (effective_demand + self.num_members - 1) // self.num_members
         avail_count = {
             m: sum(1 for d in range(self.days) for s in range(self.slots) if avail[(m, d, s)])
             for m in range(self.num_members)
@@ -344,7 +433,7 @@ class ScheduleOptimizer:
             model.AddAbsEquality(abs_diff, diff)
             dev_terms.append(abs_diff)
 
-        model.Minimize(sum(dev_terms))
+        model.Minimize(sum(dev_terms) + sum(unfilled_penalties))
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.time_limit_seconds
         status = solver.Solve(model)
@@ -359,30 +448,58 @@ class ScheduleOptimizer:
             }
 
         assignments = []
+        unfilled_count = 0
+        unfilled_details = []
         for d in range(self.days):
             for s in range(self.slots):
                 for h_idx, house in enumerate(self.houses):
+                    assigned_m = None
                     for m_idx in range(self.num_members):
                         if solver.Value(x[m_idx, d, s, h_idx]) == 1:
-                            member = self.idx_to_member[m_idx]
-                            assignments.append(
-                                ScheduleSlotAssignment(
-                                    day_of_week=d,
-                                    slot=s,
-                                    house=house,
-                                    member_id=member.id,
-                                    member_name=member.name,
-                                    color=member.color,
-                                )
+                            assigned_m = m_idx
+                            break
+                    if assigned_m is not None:
+                        member = self.idx_to_member[assigned_m]
+                        assignments.append(
+                            ScheduleSlotAssignment(
+                                day_of_week=d,
+                                slot=s,
+                                house=house,
+                                member_id=member.id,
+                                member_name=member.name,
+                                color=member.color,
                             )
+                        )
+                    else:
+                        unfilled_count += 1
+                        time_label = slot_to_time_str(s)
+                        day_name = DAYS_OF_WEEK[d]
+                        unfilled_details.append(f"{day_name} {time_label} ({house})")
+                        assignments.append(
+                            ScheduleSlotAssignment(
+                                day_of_week=d,
+                                slot=s,
+                                house=house,
+                                member_id="UNFILLED",
+                                member_name="❌ X (UNFILLED)",
+                                color="#DC2626",
+                            )
+                        )
 
         stats = self._compute_stats(assignments, set(), {m: fair_floor for m in range(self.num_members)})
+        fallback_warnings = ["Generated with relaxed constraints to resolve tight availability conflicts."]
+        if unfilled_count > 0:
+            preview = ", ".join(unfilled_details[:4])
+            if len(unfilled_details) > 4:
+                preview += f" (+{len(unfilled_details) - 4} more)"
+            fallback_warnings.append(f"{unfilled_count} slot(s) could not be filled due to everyone being busy: {preview}")
+
         return {
             "success": True,
             "status": "RELAXED_FEASIBLE",
             "assignments": assignments,
             "stats": stats,
-            "warnings": ["Generated with relaxed constraints to resolve tight availability conflicts."],
+            "warnings": fallback_warnings,
         }
 
     def _compute_stats(
@@ -464,6 +581,10 @@ class ScheduleOptimizer:
         max_dev = max(abs(h - avg_hours) for h in hours_list) if hours_list else 0.0
         fairness_score = max(0.0, round(100.0 - (max_dev * 10), 1))
 
+        unfilled_count = sum(1 for a in assignments if a.member_id == "UNFILLED")
+        filled_count = len(assignments) - unfilled_count
+        coverage_pct = round((filled_count / max(1, len(assignments))) * 100, 1)
+
         return {
             "total_demand_hours": 168.0,
             "active_members_count": self.num_members,
@@ -473,5 +594,7 @@ class ScheduleOptimizer:
             "repeat_consistency_pct": repeat_consistency_pct,
             "repeat_matches": repeat_matches,
             "repeat_candidates": total_prev_slots,
+            "unfilled_slots_count": unfilled_count,
+            "coverage_pct": coverage_pct,
             "members": member_summaries,
         }

@@ -164,3 +164,137 @@ def test_repeat_week_consistency():
 
     # High consistency expected
     assert stats2["repeat_consistency_pct"] >= 90.0, f"Repeat consistency was {stats2['repeat_consistency_pct']}%, expected >= 90%"
+
+def test_weekly_exception_repeat_sacrifice():
+    """Verify that people with weekly exceptions have their repeat consistency sacrificed first."""
+    members = create_sample_members(12)
+    # Week 1
+    opt1 = ScheduleOptimizer(members=members, master_items=[], weekly_overrides=[])
+    res1 = opt1.solve()
+    assert res1["success"] is True
+    w1_assignments = res1["assignments"]
+
+    # Week 2: Member 0 has a weekly conflict on Monday (day 0) and Tuesday (day 1)
+    overrides = [
+        WeeklyOverrideItem(
+            week_id="2026-W41",
+            member_id="m_0",
+            day_of_week=0,
+            start_slot=0,
+            end_slot=12,
+            override_type="busy",
+        ),
+        WeeklyOverrideItem(
+            week_id="2026-W41",
+            member_id="m_0",
+            day_of_week=1,
+            start_slot=0,
+            end_slot=12,
+            override_type="busy",
+        ),
+    ]
+
+    opt2 = ScheduleOptimizer(
+        members=members,
+        master_items=[],
+        weekly_overrides=overrides,
+        previous_schedule=w1_assignments,
+    )
+    res2 = opt2.solve()
+    assert res2["success"] is True
+
+    # 1. Verify Member 0 is NEVER assigned during their weekly busy time
+    for a in res2["assignments"]:
+        if a.member_id == "m_0":
+            if a.day_of_week in (0, 1):
+                assert a.slot >= 12, f"Member 0 was assigned at slot {a.slot} on day {a.day_of_week} during weekly exception!"
+
+    # 2. Check that members who had NO exceptions have high repeat retention
+    w1_map = {(a.member_id, a.day_of_week, a.slot) for a in w1_assignments}
+    w2_map = {(a.member_id, a.day_of_week, a.slot) for a in res2["assignments"]}
+
+    non_exception_members = [m.id for m in members if m.id != "m_0"]
+    non_ex_w1_count = sum(1 for (mid, d, s) in w1_map if mid in non_exception_members)
+    non_ex_retained = sum(1 for (mid, d, s) in w1_map if mid in non_exception_members and (mid, d, s) in w2_map)
+
+    retention_pct = (non_ex_retained / non_ex_w1_count) * 100
+    assert retention_pct >= 90.0, f"Unaffected members retention was {retention_pct}%, expected >= 90%"
+
+
+def test_unfillable_slots_marked_with_x():
+    """Verify that when no member is available for a slot, it is marked with an X (UNFILLED)."""
+    members = create_sample_members(12)
+    # Mark all members as busy on Day 0 (Monday) slot 0 (9:00 - 9:30 AM)
+    all_busy_overrides = [
+        WeeklyOverrideItem(
+            week_id="2026-W42",
+            member_id=m.id,
+            day_of_week=0,
+            start_slot=0,
+            end_slot=1,  # 9:00 - 9:30 AM
+            override_type="busy",
+        )
+        for m in members
+    ]
+    optimizer = ScheduleOptimizer(
+        members=members,
+        master_items=[],
+        weekly_overrides=all_busy_overrides,
+    )
+    result = optimizer.solve()
+    assert result["success"] is True
+    assignments = result["assignments"]
+    assert len(assignments) == 336
+
+    # Verify both houses at Day 0, Slot 0 are marked as UNFILLED with '❌ X (UNFILLED)'
+    unfilled_assignments = [
+        a for a in assignments
+        if a.day_of_week == 0 and a.slot == 0
+    ]
+    assert len(unfilled_assignments) == 2  # Burn and THC
+    for a in unfilled_assignments:
+        assert a.member_id == "UNFILLED"
+        assert "❌ X" in a.member_name
+
+    stats = result["stats"]
+    assert stats["unfilled_slots_count"] == 2
+
+
+def test_single_free_person_given_to_thc():
+    """Verify that if only one person is free for a given slot, they are given to THC and Burn is unfilled."""
+    members = create_sample_members(12)
+    # Make all members EXCEPT Dylan (m_0) busy on Day 1 (Tuesday) slots 4 and 5 (11:00 AM - 12:00 PM)
+    overrides = []
+    for m in members:
+        if m.id != "m_0":
+            overrides.append(
+                WeeklyOverrideItem(
+                    week_id="2026-W43",
+                    member_id=m.id,
+                    day_of_week=1,
+                    start_slot=4,
+                    end_slot=6,  # slots 4 and 5
+                    override_type="busy",
+                )
+            )
+
+    optimizer = ScheduleOptimizer(
+        members=members,
+        master_items=[],
+        weekly_overrides=overrides,
+        min_shift_slots=2,
+    )
+    result = optimizer.solve()
+    assert result["success"] is True
+
+    # At Day 1, Slot 4 and Slot 5:
+    for slot in (4, 5):
+        slot_assigns = {
+            a.house: a for a in result["assignments"]
+            if a.day_of_week == 1 and a.slot == slot
+        }
+        # THC must be assigned to Dylan (m_0)
+        assert slot_assigns["THC"].member_id == "m_0", f"Expected m_0 at THC for slot {slot}, got {slot_assigns['THC'].member_id}"
+        # Burn must be UNFILLED
+        assert slot_assigns["Burn"].member_id == "UNFILLED", f"Expected Burn to be UNFILLED for slot {slot}, got {slot_assigns['Burn'].member_id}"
+

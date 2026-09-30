@@ -281,8 +281,15 @@ function renderMetrics() {
   document.getElementById("metric-members").textContent = activeMembersCount;
 
   if (s) {
-    document.getElementById("metric-coverage").textContent = "100%";
-    document.getElementById("metric-coverage-sub").textContent = "336 / 336 slots (168h)";
+    if (s.unfilled_slots_count && s.unfilled_slots_count > 0) {
+      document.getElementById("metric-coverage").textContent = `${s.coverage_pct}%`;
+      document.getElementById("metric-coverage-sub").textContent = `${s.unfilled_slots_count} slot(s) unfilled (marked with ❌ X)`;
+      document.getElementById("metric-coverage").style.color = "#dc2626";
+    } else {
+      document.getElementById("metric-coverage").textContent = "100%";
+      document.getElementById("metric-coverage-sub").textContent = "336 / 336 slots (168h)";
+      document.getElementById("metric-coverage").style.color = "";
+    }
 
     document.getElementById("metric-fairness").textContent = `${s.fairness_score}%`;
     document.getElementById("metric-fairness-sub").textContent = `Max diff: ±${s.max_hours_deviation}h (avg ${s.avg_hours_per_member}h)`;
@@ -292,6 +299,7 @@ function renderMetrics() {
   } else {
     document.getElementById("metric-coverage").textContent = "0%";
     document.getElementById("metric-coverage-sub").textContent = "Not yet generated for this week";
+    document.getElementById("metric-coverage").style.color = "";
     document.getElementById("metric-fairness").textContent = "--";
     document.getElementById("metric-repeat").textContent = "--";
   }
@@ -354,13 +362,16 @@ function createSlotCell(assign, day, slot, house) {
   td.className = "schedule-slot";
 
   if (assign) {
+    const isUnfilled = assign.member_id === "UNFILLED";
     const isHighlighted = state.memberFilter === "all" || state.memberFilter === assign.member_id;
     const pill = document.createElement("div");
-    pill.className = "slot-assignment-pill";
-    pill.style.backgroundColor = assign.color || "#2563EB";
+    pill.className = `slot-assignment-pill ${isUnfilled ? 'slot-unfilled' : ''}`;
+    pill.style.backgroundColor = isUnfilled ? "#dc2626" : (assign.color || "#2563EB");
     pill.style.opacity = isHighlighted ? "1.0" : "0.2";
-    pill.textContent = assign.member_name || "Assigned";
-    pill.title = `${assign.member_name} @ ${house}\n${DAYS[day]} ${slotRangeStr(slot)}`;
+    pill.textContent = isUnfilled ? "❌ X (UNFILLED)" : (assign.member_name || "Assigned");
+    pill.title = isUnfilled
+      ? `UNFILLED SLOT: Nobody available!\n${DAYS[day]} ${slotRangeStr(slot)} @ ${house}\nClick to assign a volunteer.`
+      : `${assign.member_name} @ ${house}\n${DAYS[day]} ${slotRangeStr(slot)}`;
 
     // Quick swap / tweak click handler
     pill.addEventListener("click", () => {
