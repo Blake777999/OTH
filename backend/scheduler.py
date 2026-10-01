@@ -27,7 +27,7 @@ class ScheduleOptimizer:
         previous_schedule: Optional[List[ScheduleSlotAssignment]] = None,
         min_shift_slots: int = 2,  # Minimum 1 hour (2 thirty-minute slots)
         max_daily_slots: int = 10, # Max 5 hours in a single day
-        time_limit_seconds: float = 25.0,
+        time_limit_seconds: float = 30.0,
     ):
         self.members = [m for m in members if m.active]
         self.num_members = len(self.members)
@@ -245,13 +245,12 @@ class ScheduleOptimizer:
 
         # 6. House Switching Rules & Separation:
         # Rule A: Minimum 5-hour gap (10 slots) between working at different houses on the same day!
-        # If member is at House 0 at s1, they cannot be at House 1 at any s2 within 9 slots (4.5h).
+        # If member is at House 0 at s, they cannot be at House 1 at any slot within 9 slots before or after.
         for m in range(self.num_members):
             for d in range(self.days):
-                for s1 in range(self.slots):
-                    for s2 in range(s1 + 1, min(self.slots, s1 + 10)):
-                        model.Add(x[m, d, s1, 0] + x[m, d, s2, 1] <= 1)
-                        model.Add(x[m, d, s1, 1] + x[m, d, s2, 0] <= 1)
+                for s in range(self.slots):
+                    window_slots = [x[m, d, s2, 1] for s2 in range(max(0, s - 9), min(self.slots, s + 10))]
+                    model.Add(sum(window_slots) == 0).OnlyEnforceIf(x[m, d, s, 0])
 
         # Rule B: Heavily disincentivize working at two houses on the same day at all
         house_switch_penalties = []
@@ -271,6 +270,7 @@ class ScheduleOptimizer:
         # Weekdays (Mon-Fri): Cap at 2 sittings max (strictly forbids 3rd or 4th shift) and heavily penalize 2nd shift.
         split_shift_penalties = []
         for m in range(self.num_members):
+            member_sec_shifts = []
             for d in range(self.days):
                 starts = []
                 s0 = model.NewBoolVar(f"st_{m}_{d}_0")
@@ -279,16 +279,19 @@ class ScheduleOptimizer:
                 for s in range(1, self.slots):
                     st = model.NewBoolVar(f"st_{m}_{d}_{s}")
                     model.Add(st >= is_working[m, d, s] - is_working[m, d, s - 1])
+                    model.Add(st <= is_working[m, d, s])
+                    model.Add(st <= 1 - is_working[m, d, s - 1])
                     starts.append(st)
 
                 num_starts = sum(starts)
                 if d in (5, 6):  # Saturday & Sunday: strictly at most 1 continuous sitting
                     model.Add(num_starts <= 1)
-                else:  # Weekdays: cap at 2 and heavily penalize split shifts
+                else:  # Weekdays: cap at 2 and heavily penalize split shifts (one sitting priority)
                     model.Add(num_starts <= 2)
                     sec_shift = model.NewIntVar(0, 1, f"sec_sh_{m}_{d}")
                     model.Add(sec_shift >= num_starts - 1)
-                    split_shift_penalties.append(-250 * sec_shift)
+                    member_sec_shifts.append(sec_shift)
+                    split_shift_penalties.append(-5000 * sec_shift)
 
         # 7. Repeat Consistency Across Weeks:
         # Prioritize giving people the same times every week even if at different houses!
@@ -310,38 +313,33 @@ class ScheduleOptimizer:
 
         for (prev_m_idx, d, s) in prev_work_set:
             if 0 <= d < self.days and 0 <= s < self.slots:
-                # Members with NO weekly exceptions are strongly protected: high reward (300).
-                # Members who submitted weekly exceptions have their repeat times sacrificed first: lower reward (50).
-                weight = 50 if prev_m_idx in members_with_exceptions else 300
+                # Members with NO weekly exceptions are strongly protected: high reward (6000).
+                # Members who submitted weekly exceptions have their repeat times sacrificed first: lower reward (100).
+                weight = 100 if prev_m_idx in members_with_exceptions else 6000
                 repeat_reward_terms.append(weight * is_working[prev_m_idx, d, s])
 
-        # 8. Shift Preferences & Daily 2-Hour Target:
-        # Daily indicator: works_day[m, d]
-        preference_terms = []
+        # 8. High-Priority 2.0 to 2.5 Hours Daily Target (4 to 5 slots):
+        # Highly prioritize giving everyone 2.0 to 2.5 hours per working day.
+        # Preference between 2hr everyday and longer shifts on fewer days has been removed.
         daily_target_penalties = []
-        for m_idx, member in enumerate(self.members):
+        for m_idx in range(self.num_members):
             for d in range(self.days):
                 day_slots = sum(x[m_idx, d, s, h] for s in range(self.slots) for h in range(self.num_houses))
                 works_day = model.NewBoolVar(f"works_day_{m_idx}_{d}")
                 model.Add(day_slots <= self.max_daily_slots) # 10 slots = 5 hours max
                 model.Add(day_slots <= self.slots * works_day)
+                model.Add(day_slots >= 1).OnlyEnforceIf(works_day)
+                model.Add(day_slots == 0).OnlyEnforceIf(works_day.Not())
 
-                # Penalize deviation from 4 slots (2 hours) when working
-                dev_2h = model.NewIntVar(0, self.max_daily_slots, f"dev2h_{m_idx}_{d}")
-                model.Add(dev_2h >= day_slots - 4)
-                model.Add(dev_2h >= 4 * works_day - day_slots)
-                daily_target_penalties.append(-20 * dev_2h)
+                # Strongly penalize working less than 4 slots (under 2 hours)
+                under_4 = model.NewIntVar(0, 4, f"und_{m_idx}_{d}")
+                model.Add(under_4 >= 4 * works_day - day_slots)
+                daily_target_penalties.append(-600 * under_4)
 
-                if member.shift_preference == "daily_short":
-                    # Prefers ~2 hours (4 slots) everyday
-                    preference_terms.append(15 * works_day)
-                    excess_daily = model.NewIntVar(0, self.slots, f"ex_day_{m_idx}_{d}")
-                    model.Add(excess_daily >= day_slots - 4)
-                    preference_terms.append(-10 * excess_daily)
-
-                elif member.shift_preference == "fewer_long":
-                    # Prefers fewer days, longer shifts (e.g. 3-5 hours = 6-10 slots)
-                    preference_terms.append(-15 * works_day)
+                # Strongly penalize working more than 5 slots (over 2.5 hours)
+                over_5 = model.NewIntVar(0, self.max_daily_slots, f"ov_{m_idx}_{d}")
+                model.Add(over_5 >= day_slots - 5)
+                daily_target_penalties.append(-400 * over_5)
 
         # Warm-start hints from previous schedule if available
         if self.previous_schedule:
@@ -352,13 +350,13 @@ class ScheduleOptimizer:
                     if 0 <= prev.day_of_week < self.days and 0 <= prev.slot < self.slots:
                         if avail[(prev_m_idx, prev.day_of_week, prev.slot)]:
                             model.AddHint(x[prev_m_idx, prev.day_of_week, prev.slot, h_idx], 1)
+                            model.AddHint(is_working[prev_m_idx, prev.day_of_week, prev.slot], 1)
 
         # Total Objective Function
         objective = (
             sum(unfilled_penalties)
             + sum(house_switch_penalties)
             + sum(repeat_reward_terms)
-            + sum(preference_terms)
             + sum(daily_target_penalties)
             + sum(split_shift_penalties)
         )
@@ -367,7 +365,7 @@ class ScheduleOptimizer:
         # Solve
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.time_limit_seconds
-        solver.parameters.num_workers = 4
+        solver.parameters.num_workers = 8
         status = solver.Solve(model)
 
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
@@ -561,6 +559,7 @@ class ScheduleOptimizer:
         model.Minimize(sum(dev_terms) + sum(unfilled_penalties) + sum(fallback_split_penalties) + sum(fallback_switch_penalties))
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.time_limit_seconds
+        solver.parameters.num_workers = 8
         status = solver.Solve(model)
 
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):

@@ -475,3 +475,51 @@ def test_house_switch_gap_and_stint_limits():
                 f"Member {mid} on day {day} switched houses with gap of only {min_gap_slots * 0.5} hours (min required is 5.0h)!"
             )
 
+
+def test_daily_hours_target_and_no_preference():
+    """Verify that shifts are highly prioritized to 2.0 - 2.5 hours per day, single sittings, and no short/long preference bias."""
+    from backend.models import get_all_members, get_master_schedule
+    members = get_all_members()
+    master_items = get_master_schedule()
+
+    optimizer = ScheduleOptimizer(
+        members=members,
+        master_items=master_items,
+        weekly_overrides=[],
+        min_shift_slots=2,
+    )
+    result = optimizer.solve()
+    assert result["success"] is True
+
+    member_days = {}
+    for a in result["assignments"]:
+        if a.member_id != "UNFILLED":
+            member_days.setdefault((a.member_id, a.day_of_week), []).append(a.slot)
+
+    in_target_range = 0
+    total_working_days = len(member_days)
+
+    for (mid, d), slots in member_days.items():
+        day_hours = len(slots) * 0.5
+        # Must respect daily max cap
+        assert day_hours <= 5.0, f"Member {mid} on day {d} worked {day_hours}h (max 5.0h)!"
+        # Check if in 2.0h - 2.5h target window (4 to 5 slots)
+        if 4 <= len(slots) <= 5:
+            in_target_range += 1
+
+        # Check single sitting on weekends
+        if d in (5, 6):
+            slots.sort()
+            sittings = 0
+            prev = None
+            for s in slots:
+                if prev is None or s != prev + 1:
+                    sittings += 1
+                prev = s
+            assert sittings <= 1, f"Weekend split shift found for {mid} on day {d}!"
+
+    target_pct = (in_target_range / total_working_days) * 100
+    # Over 60% of shifts are strictly 2.0 to 2.5 hours
+    assert target_pct >= 60.0, f"Only {target_pct:.1f}% in 2.0-2.5h range, expected >= 60%"
+
+
