@@ -39,7 +39,12 @@ from backend.models import (
     slot_range_to_str,
 )
 from backend.scheduler import ScheduleOptimizer
-from backend.sheets import generate_csv, generate_tsv_for_sheets, sync_to_google_sheet
+from backend.sheets import (
+    generate_csv,
+    generate_tsv_for_sheets,
+    generate_excel_for_sheets,
+    sync_to_google_sheet,
+)
 
 # Initialize DB
 init_db()
@@ -312,6 +317,21 @@ def api_get_all_weeks():
     return {"weeks": weeks, "current_week": current}
 
 # ----------------- Exports & Google Sheets -----------------
+
+@app.get("/api/schedules/{week_id}/export.xlsx")
+def api_export_xlsx(week_id: str):
+    assignments = get_schedule(week_id)
+    if not assignments:
+        raise HTTPException(status_code=404, detail="No schedule found for this week")
+    members = get_all_members()
+    stats_json = get_config(f"stats_{week_id}", "")
+    stats = json.loads(stats_json) if stats_json else None
+    xlsx_bytes = generate_excel_for_sheets(week_id, assignments, members, stats)
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="old_town_hours_{week_id}.xlsx"'}
+    )
 
 @app.get("/api/schedules/{week_id}/export.csv")
 def api_export_csv(week_id: str):

@@ -82,7 +82,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   try { await loadWeeks(); } catch (e) { console.error("loadWeeks error:", e); }
   try { await loadMembers(); } catch (e) { console.error("loadMembers error:", e); }
   try { await loadSchedule(); } catch (e) { console.error("loadSchedule error:", e); }
-  try { await loadSheetsConfig(); } catch (e) { console.error("loadSheetsConfig error:", e); }
 
   // Setup painter grids
   try { buildMasterPainterTable(); } catch (e) { console.error("buildMasterPainterTable error:", e); }
@@ -164,11 +163,6 @@ function setupEventListeners() {
   safeAddListener("member-form", "submit", handleMemberFormSubmit);
   safeAddListener("btn-delete-member", "click", handleMemberDelete);
 
-  // Google Sheets Config
-  safeAddListener("btn-save-sheet-config", "click", saveSheetsConfig);
-  safeAddListener("btn-trigger-sync", "click", triggerSheetSync);
-  safeAddListener("btn-quick-sync-sheets", "click", triggerSheetSync);
-
   // Global mouse up for painter grids
   window.addEventListener("mouseup", () => {
     state.isPainting = false;
@@ -191,10 +185,23 @@ async function loadWeeks() {
 }
 
 function updateWeekHeaderDisplay() {
-  document.getElementById("current-week-label").textContent = formatWeekDisplay(state.currentWeekId);
-  document.getElementById("override-week-badge").textContent = formatWeekDisplay(state.currentWeekId);
-  document.getElementById("btn-download-csv").href = `/api/schedules/${state.currentWeekId}/export.csv`;
-  document.getElementById("btn-download-csv-tab").href = `/api/schedules/${state.currentWeekId}/export.csv`;
+  const weekLabel = document.getElementById("current-week-label");
+  if (weekLabel) weekLabel.textContent = formatWeekDisplay(state.currentWeekId);
+  const overrideBadge = document.getElementById("override-week-badge");
+  if (overrideBadge) overrideBadge.textContent = formatWeekDisplay(state.currentWeekId);
+
+  const xlsxUrl = `/api/schedules/${state.currentWeekId}/export.xlsx`;
+  const csvUrl = `/api/schedules/${state.currentWeekId}/export.csv`;
+
+  const btnXlsx = document.getElementById("btn-download-xlsx");
+  if (btnXlsx) btnXlsx.href = xlsxUrl;
+  const btnXlsxTab = document.getElementById("btn-download-xlsx-tab");
+  if (btnXlsxTab) btnXlsxTab.href = xlsxUrl;
+
+  const btnCsv = document.getElementById("btn-download-csv");
+  if (btnCsv) btnCsv.href = csvUrl;
+  const btnCsvTab = document.getElementById("btn-download-csv-tab");
+  if (btnCsvTab) btnCsvTab.href = csvUrl;
 }
 
 function navigateWeek(delta) {
@@ -896,77 +903,7 @@ async function runScheduleGeneration() {
   }
 }
 
-// ----------------- Google Sheets Integration & Export -----------------
-
-async function loadSheetsConfig() {
-  try {
-    const res = await fetch("/api/sheets/config");
-    state.sheetsConfig = await res.json();
-    document.getElementById("sheets-spreadsheet-id").value = state.sheetsConfig.spreadsheet_id || "";
-    document.getElementById("sheets-auto-sync").checked = state.sheetsConfig.auto_sync || false;
-
-    const badge = document.getElementById("credentials-status-badge");
-    const linkArea = document.getElementById("sheet-link-area");
-    const quickBtn = document.getElementById("btn-quick-sync-sheets");
-
-    if (state.sheetsConfig.has_credentials) {
-      badge.innerHTML = 'Status: <span style="color: var(--success);">Configured & Ready ✅</span>';
-    } else {
-      badge.innerHTML = 'Status: <span style="color: var(--gray-400);">No credentials uploaded</span>';
-    }
-
-    if (state.sheetsConfig.spreadsheet_id) {
-      linkArea.style.display = "block";
-      document.getElementById("sheet-open-link").href = `https://docs.google.com/spreadsheets/d/${state.sheetsConfig.spreadsheet_id}`;
-      quickBtn.style.display = "inline-flex";
-    }
-  } catch (err) {
-    console.error("Failed to load sheet config:", err);
-  }
-}
-
-async function saveSheetsConfig() {
-  const spreadsheetId = document.getElementById("sheets-spreadsheet-id").value.trim();
-  const saJson = document.getElementById("sheets-sa-json").value.trim();
-  const autoSync = document.getElementById("sheets-auto-sync").checked;
-
-  try {
-    const res = await fetch("/api/sheets/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        spreadsheet_id: spreadsheetId,
-        service_account_json: saJson || null,
-        auto_sync: autoSync,
-      }),
-    });
-    if (res.ok) {
-      showToast("Google Sheets settings saved!");
-      await loadSheetsConfig();
-    }
-  } catch (err) {
-    showToast("Failed to save settings", "error");
-  }
-}
-
-async function triggerSheetSync() {
-  if (!state.sheetsConfig?.spreadsheet_id) {
-    showToast("Please configure your Google Spreadsheet ID in the Google Sheets tab first.", "error");
-    return;
-  }
-  showToast("Syncing schedule to Google Sheets...");
-  try {
-    const res = await fetch(`/api/sheets/sync/${state.currentWeekId}`, { method: "POST" });
-    const result = await res.json();
-    if (result.success) {
-      showToast("Successfully synced to Google Sheets!");
-    } else {
-      showToast(result.message || "Failed to sync to Google Sheet", "error");
-    }
-  } catch (err) {
-    showToast("Error connecting to Google Sheets API", "error");
-  }
-}
+// ----------------- Google Sheets & Spreadsheet Export -----------------
 
 async function copyForGoogleSheets() {
   try {

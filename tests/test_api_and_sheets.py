@@ -94,3 +94,34 @@ def test_sheets_config_endpoints():
     assert saved["spreadsheet_id"] == "test_sheet_123456"
     assert saved["auto_sync"] is True
     assert saved["has_credentials"] is True
+
+def test_xlsx_export_for_google_sheets():
+    """Verify Excel export endpoint generates a valid multi-sheet workbook for Google Sheets."""
+    import openpyxl
+    import io
+
+    week_id = "2026-W45"
+    res = client.get(f"/api/schedules/{week_id}/export.xlsx")
+    assert res.status_code == 200
+    assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in res.headers["content-type"]
+    assert f'filename="old_town_hours_{week_id}.xlsx"' in res.headers["content-disposition"]
+
+    wb = openpyxl.load_workbook(io.BytesIO(res.content))
+    assert "Weekly Schedule" in wb.sheetnames
+    assert "Hours Summary" in wb.sheetnames
+
+    # Check Schedule sheet
+    ws_sched = wb["Weekly Schedule"]
+    assert "Old Town Hours" in ws_sched["A1"].value
+    assert ws_sched["A2"].value == "Time"
+    assert ws_sched["B2"].value == "Monday"
+    assert ws_sched["B3"].value == "Burn"
+    assert ws_sched["C3"].value == "THC"
+
+    # Check Summary sheet
+    ws_sum = wb["Hours Summary"]
+    assert "Member Hours Summary" in ws_sum["A1"].value
+    assert ws_sum["A2"].value == "Member"
+    assert ws_sum["B2"].value == "Assigned Hours"
+    assert ws_sum["C2"].value == "Target Hours"
+    assert ws_sum.max_row >= 14 # 12 members + header + title

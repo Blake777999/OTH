@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Old Town Hours — Scheduling System</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261002-1">
+  <link rel="stylesheet" href="/static/style.css?v=20261002-2">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
 </head>
 <body>
@@ -67,12 +67,12 @@
           <button id="btn-copy-sheets" class="btn btn-secondary" title="Copy tab-delimited schedule ready to paste into Google Sheets">
             <span>📋</span> Copy for Google Sheets
           </button>
+          <a id="btn-download-xlsx" href="#" class="btn btn-secondary" title="Download Excel spreadsheet ready to open in Google Sheets">
+            <span>📊</span> Download Excel (.xlsx)
+          </a>
           <a id="btn-download-csv" href="#" class="btn btn-secondary" title="Download CSV file">
             <span>📥</span> Download CSV
           </a>
-          <button id="btn-quick-sync-sheets" class="btn btn-success" style="display: none;">
-            <span>🟢</span> Sync to Google Sheet
-          </button>
         </div>
 
         <div class="action-group">
@@ -287,90 +287,85 @@
       </div>
     </section>
 
-    <!-- ==================== TAB 5: GOOGLE SHEETS SYNC ==================== -->
+    <!-- ==================== TAB 5: GOOGLE SHEETS & EXCEL EXPORT ==================== -->
     <section id="tab-sheets" class="view-section">
       <div class="action-bar">
         <div>
-          <h3 style="font-size: 1.1rem; font-weight: 700;">Google Sheets Integration & Weekly Sync</h3>
+          <h3 style="font-size: 1.1rem; font-weight: 700;">Google Sheets & Spreadsheet Export</h3>
           <p style="font-size: 0.8rem; color: var(--gray-500);">
-            View the live schedule in Google Sheets, auto-sync weekly, or copy-paste directly.
+            Download a pre-formatted spreadsheet ready to import into Google Sheets, or paste instantly via clipboard.
           </p>
-        </div>
-        <div class="action-group">
-          <button id="btn-save-sheet-config" class="btn btn-primary">
-            <span>💾</span> Save Settings
-          </button>
-          <button id="btn-trigger-sync" class="btn btn-success">
-            <span>🚀</span> Sync Week Now
-          </button>
         </div>
       </div>
 
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
-        <!-- Configuration Card -->
-        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 1.5rem; box-shadow: var(--card-shadow);">
-          <h4 style="font-size: 1rem; font-weight: 700; margin-bottom: 1rem; color: var(--gray-900);">Google Sheet Connection</h4>
+        <!-- Option 1: File Download & Import -->
+        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 1.5rem; box-shadow: var(--card-shadow); display: flex; flex-direction: column; justify-content: space-between;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+              <span style="font-size: 1.5rem;">📊</span>
+              <div>
+                <h4 style="font-size: 1.05rem; font-weight: 700; color: var(--gray-900);">Option 1: Download & Import into Google Sheets</h4>
+                <p style="font-size: 0.8rem; color: var(--gray-500);">Full multi-tab workbook with Schedule & Hours Summary</p>
+              </div>
+            </div>
 
-          <div style="margin-bottom: 1rem;">
-            <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Google Spreadsheet ID:</label>
-            <input type="text" id="sheets-spreadsheet-id" placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms" style="width: 100%; padding: 0.6rem; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 0.85rem; font-family: monospace;">
-            <small style="color: var(--gray-500); font-size: 0.75rem; display: block; margin-top: 0.25rem;">
-              Found in your sheet URL: https://docs.google.com/spreadsheets/d/<strong>YOUR_SPREADSHEET_ID</strong>/edit
-            </small>
-          </div>
+            <p style="font-size: 0.85rem; color: var(--gray-600); margin-bottom: 1.25rem;">
+              Download a cleanly formatted Excel spreadsheet (`.xlsx`) designed specifically for Google Sheets. It includes colors, borders, headers, and two tabs: <strong>Weekly Schedule</strong> and <strong>Hours Summary</strong>.
+            </p>
 
-          <div style="margin-bottom: 1rem;">
-            <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Service Account Credentials JSON:</label>
-            <textarea id="sheets-sa-json" rows="6" placeholder='Paste your Google Cloud Service Account JSON key here...' style="width: 100%; padding: 0.6rem; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 0.8rem; font-family: monospace;"></textarea>
-            <div id="credentials-status-badge" style="margin-top: 0.35rem; font-size: 0.8rem; font-weight: 600;">
-              Status: Not configured
+            <div style="background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem;">
+              <div style="font-weight: 700; font-size: 0.8rem; color: var(--gray-700); margin-bottom: 0.5rem; text-transform: uppercase;">How to import in Google Sheets:</div>
+              <ol style="font-size: 0.825rem; color: var(--gray-700); padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.4rem; margin: 0;">
+                <li>Click <strong>Download Excel (.xlsx)</strong> below.</li>
+                <li>Go to <a href="https://sheets.new" target="_blank" style="color: var(--primary); text-decoration: underline; font-weight: 600;">sheets.new</a> (or open any Google Sheet).</li>
+                <li>Click <strong>File &rarr; Import &rarr; Upload</strong> and select the downloaded file.</li>
+                <li>Choose <strong>"Create new spreadsheet"</strong> or <strong>"Insert new sheet(s)"</strong> &rarr; click <strong>Import data</strong>!</li>
+              </ol>
             </div>
           </div>
 
-          <div style="margin-bottom: 1.25rem;">
-            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; cursor: pointer; font-weight: 600;">
-              <input type="checkbox" id="sheets-auto-sync">
-              <span>Automatically sync to Google Sheet every time a new schedule is generated</span>
-            </label>
-          </div>
-
-          <div id="sheet-link-area" style="display: none; padding: 0.75rem; background: var(--thc-bg); border: 1px solid var(--thc-border); border-radius: 8px; font-size: 0.85rem;">
-            🔗 <strong>Live Spreadsheet:</strong> <a id="sheet-open-link" href="#" target="_blank" style="color: var(--thc-color); font-weight: 700; text-decoration: underline;">Open Google Sheet in new tab &rarr;</a>
-          </div>
-        </div>
-
-        <!-- Zero-Setup Quick Export Card -->
-        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 1.5rem; box-shadow: var(--card-shadow);">
-          <h4 style="font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--gray-900);">⚡ Zero-Setup Instant Paste</h4>
-          <p style="font-size: 0.85rem; color: var(--gray-600); margin-bottom: 1rem;">
-            Don't have Google Cloud API credentials set up yet? No problem! Use our 1-click clipboard formatter:
-          </p>
-
-          <ol style="font-size: 0.85rem; color: var(--gray-700); padding-left: 1.25rem; margin-bottom: 1.25rem; display: flex; flex-direction: column; gap: 0.5rem;">
-            <li>Click <strong>"Copy for Google Sheets"</strong> below.</li>
-            <li>Open any Google Sheet in your browser.</li>
-            <li>Click cell <strong>A1</strong> and press <strong>Ctrl + V</strong> (or Cmd + V).</li>
-            <li>The full 7-day schedule with Burn & THC columns and time slots pastes perfectly formatted!</li>
-          </ol>
-
-          <div style="display: flex; gap: 0.75rem;">
-            <button id="btn-copy-sheets-tab" class="btn btn-primary">
-              <span>📋</span> Copy Formatted Schedule
-            </button>
-            <a id="btn-download-csv-tab" href="#" class="btn btn-secondary">
+          <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+            <a id="btn-download-xlsx-tab" href="#" class="btn btn-primary" style="font-weight: 700; padding: 0.6rem 1.2rem;">
+              <span>📊</span> Download Excel (.xlsx)
+            </a>
+            <a id="btn-download-csv-tab" href="#" class="btn btn-secondary" style="font-weight: 600; padding: 0.6rem 1.2rem;">
               <span>📥</span> Download CSV
             </a>
           </div>
+        </div>
 
-          <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid var(--gray-200);">
+        <!-- Option 2: 1-Click Clipboard Instant Paste -->
+        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 1.5rem; box-shadow: var(--card-shadow); display: flex; flex-direction: column; justify-content: space-between;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+              <span style="font-size: 1.5rem;">⚡</span>
+              <div>
+                <h4 style="font-size: 1.05rem; font-weight: 700; color: var(--gray-900);">Option 2: 1-Click Instant Paste</h4>
+                <p style="font-size: 0.8rem; color: var(--gray-500);">Zero-download clipboard copy directly into any sheet</p>
+              </div>
+            </div>
 
-          <h5 style="font-size: 0.9rem; font-weight: 700; margin-bottom: 0.5rem;">How to set up Direct Google Sync (Optional):</h5>
-          <ol style="font-size: 0.8rem; color: var(--gray-600); padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.35rem;">
-            <li>In Google Cloud Console, enable the <strong>Google Sheets API</strong>.</li>
-            <li>Create a Service Account and download its JSON key.</li>
-            <li>Share your Google Sheet with the service account's client email (Editor access).</li>
-            <li>Paste your Spreadsheet ID and JSON key on the left, then click Save!</li>
-          </ol>
+            <p style="font-size: 0.85rem; color: var(--gray-600); margin-bottom: 1.25rem;">
+              No file downloading required! Formats the full 7-day schedule with Burn & THC columns and time slots directly to your clipboard so you can paste it straight into Google Sheets with one keystroke.
+            </p>
+
+            <div style="background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem;">
+              <div style="font-weight: 700; font-size: 0.8rem; color: var(--gray-700); margin-bottom: 0.5rem; text-transform: uppercase;">How to paste:</div>
+              <ol style="font-size: 0.825rem; color: var(--gray-700); padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.4rem; margin: 0;">
+                <li>Click <strong>Copy Formatted Schedule</strong> below.</li>
+                <li>Switch to your Google Sheet (or open <a href="https://sheets.new" target="_blank" style="color: var(--primary); text-decoration: underline; font-weight: 600;">sheets.new</a>).</li>
+                <li>Click cell <strong>A1</strong> and press <strong>Ctrl + V</strong> (or <strong>Cmd + V</strong> on Mac).</li>
+                <li>The entire schedule with time slots and house columns pastes in place!</li>
+              </ol>
+            </div>
+          </div>
+
+          <div>
+            <button id="btn-copy-sheets-tab" class="btn btn-primary" style="font-weight: 700; padding: 0.6rem 1.2rem;">
+              <span>📋</span> Copy Formatted Schedule
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -494,6 +489,6 @@
   <!-- Toast Notification Container -->
   <div class="toast-container" id="toast-container"></div>
 
-  <script src="/static/app.js?v=20261002-1"></script>
+  <script src="/static/app.js?v=20261002-2"></script>
 </body>
 </html>
