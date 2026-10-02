@@ -67,19 +67,26 @@ function formatWeekDisplay(weekId) {
 
 // ----------------- Initialization -----------------
 
+function safeAddListener(id, event, handler) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.addEventListener(event, handler);
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
-  setupNavigation();
-  setupEventListeners();
+  try { setupNavigation(); } catch (e) { console.error("setupNavigation error:", e); }
+  try { setupEventListeners(); } catch (e) { console.error("setupEventListeners error:", e); }
   
   // Fetch initial weeks and members
-  await loadWeeks();
-  await loadMembers();
-  await loadSchedule();
-  await loadSheetsConfig();
+  try { await loadWeeks(); } catch (e) { console.error("loadWeeks error:", e); }
+  try { await loadMembers(); } catch (e) { console.error("loadMembers error:", e); }
+  try { await loadSchedule(); } catch (e) { console.error("loadSchedule error:", e); }
+  try { await loadSheetsConfig(); } catch (e) { console.error("loadSheetsConfig error:", e); }
 
   // Setup painter grids
-  buildMasterPainterTable();
-  buildOverridePainterTable();
+  try { buildMasterPainterTable(); } catch (e) { console.error("buildMasterPainterTable error:", e); }
+  try { buildOverridePainterTable(); } catch (e) { console.error("buildOverridePainterTable error:", e); }
 });
 
 function setupNavigation() {
@@ -91,7 +98,8 @@ function setupNavigation() {
       document.querySelectorAll(".view-section").forEach(s => s.classList.remove("active"));
 
       tab.classList.add("active");
-      document.getElementById(target).classList.add("active");
+      const targetEl = document.getElementById(target);
+      if (targetEl) targetEl.classList.add("active");
       state.activeTab = target;
 
       if (target === "tab-master") {
@@ -107,59 +115,59 @@ function setupNavigation() {
 
 function setupEventListeners() {
   // Week navigation
-  document.getElementById("btn-prev-week").addEventListener("click", () => navigateWeek(-1));
-  document.getElementById("btn-next-week").addEventListener("click", () => navigateWeek(1));
-  document.getElementById("btn-current-week").addEventListener("click", () => navigateToCurrentWeek());
+  safeAddListener("btn-prev-week", "click", () => navigateWeek(-1));
+  safeAddListener("btn-next-week", "click", () => navigateWeek(1));
+  safeAddListener("btn-current-week", "click", () => navigateToCurrentWeek());
 
   // Filters
-  document.getElementById("house-filter").addEventListener("change", (e) => {
+  safeAddListener("house-filter", "change", (e) => {
     state.houseFilter = e.target.value;
     renderScheduleGrid();
   });
-  document.getElementById("member-filter").addEventListener("change", (e) => {
+  safeAddListener("member-filter", "change", (e) => {
     state.memberFilter = e.target.value;
     renderScheduleGrid();
   });
 
   // Schedule Action Buttons
-  document.getElementById("btn-open-generate").addEventListener("click", openGenerateModal);
-  document.getElementById("modal-gen-close").addEventListener("click", closeGenerateModal);
-  document.getElementById("btn-cancel-gen").addEventListener("click", closeGenerateModal);
-  document.getElementById("btn-run-gen").addEventListener("click", runScheduleGeneration);
+  safeAddListener("btn-open-generate", "click", openGenerateModal);
+  safeAddListener("modal-gen-close", "click", closeGenerateModal);
+  safeAddListener("btn-cancel-gen", "click", closeGenerateModal);
+  safeAddListener("btn-run-gen", "click", runScheduleGeneration);
 
   // Copy for Google Sheets
-  document.getElementById("btn-copy-sheets").addEventListener("click", copyForGoogleSheets);
-  document.getElementById("btn-copy-sheets-tab").addEventListener("click", copyForGoogleSheets);
+  safeAddListener("btn-copy-sheets", "click", copyForGoogleSheets);
+  safeAddListener("btn-copy-sheets-tab", "click", copyForGoogleSheets);
 
   // Master schedule member select
-  document.getElementById("master-member-select").addEventListener("change", (e) => {
+  safeAddListener("master-member-select", "change", (e) => {
     state.selectedMasterMemberId = e.target.value;
     syncMasterPainter();
   });
 
   // Master painter actions
-  document.getElementById("btn-save-master").addEventListener("click", saveMasterSchedule);
-  document.getElementById("btn-clear-master").addEventListener("click", clearMasterSchedule);
+  safeAddListener("btn-save-master", "click", saveMasterSchedule);
+  safeAddListener("btn-clear-master", "click", clearMasterSchedule);
 
   // Override painter member select
-  document.getElementById("override-member-select").addEventListener("change", (e) => {
+  safeAddListener("override-member-select", "change", (e) => {
     state.selectedOverrideMemberId = e.target.value;
     syncOverridePainter();
   });
-  document.getElementById("btn-save-overrides").addEventListener("click", saveWeeklyOverrides);
-  document.getElementById("btn-clear-overrides").addEventListener("click", clearWeeklyOverrides);
+  safeAddListener("btn-save-overrides", "click", saveWeeklyOverrides);
+  safeAddListener("btn-clear-overrides", "click", clearWeeklyOverrides);
 
   // Member Modal
-  document.getElementById("btn-add-member").addEventListener("click", () => openMemberModal(null));
-  document.getElementById("modal-member-close").addEventListener("click", closeMemberModal);
-  document.getElementById("btn-cancel-member").addEventListener("click", closeMemberModal);
-  document.getElementById("member-form").addEventListener("submit", handleMemberFormSubmit);
-  document.getElementById("btn-delete-member").addEventListener("click", handleMemberDelete);
+  safeAddListener("btn-add-member", "click", () => openMemberModal(null));
+  safeAddListener("modal-member-close", "click", closeMemberModal);
+  safeAddListener("btn-cancel-member", "click", closeMemberModal);
+  safeAddListener("member-form", "submit", handleMemberFormSubmit);
+  safeAddListener("btn-delete-member", "click", handleMemberDelete);
 
   // Google Sheets Config
-  document.getElementById("btn-save-sheet-config").addEventListener("click", saveSheetsConfig);
-  document.getElementById("btn-trigger-sync").addEventListener("click", triggerSheetSync);
-  document.getElementById("btn-quick-sync-sheets").addEventListener("click", triggerSheetSync);
+  safeAddListener("btn-save-sheet-config", "click", saveSheetsConfig);
+  safeAddListener("btn-trigger-sync", "click", triggerSheetSync);
+  safeAddListener("btn-quick-sync-sheets", "click", triggerSheetSync);
 
   // Global mouse up for painter grids
   window.addEventListener("mouseup", () => {
