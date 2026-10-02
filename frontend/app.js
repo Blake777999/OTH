@@ -137,10 +137,6 @@ function setupEventListeners() {
     syncMasterPainter();
   });
 
-  // Master schedule preference radios
-  document.getElementById("pref-daily").addEventListener("change", () => updateMemberPref("daily_short"));
-  document.getElementById("pref-longer").addEventListener("change", () => updateMemberPref("fewer_long"));
-
   // Master painter actions
   document.getElementById("btn-save-master").addEventListener("click", saveMasterSchedule);
   document.getElementById("btn-clear-master").addEventListener("click", clearMasterSchedule);
@@ -427,7 +423,7 @@ function renderSummaryTable() {
   const members = state.scheduleData?.stats?.members || [];
 
   if (members.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: var(--gray-400); padding: 1.5rem;">No schedule generated yet. Click 'Generate Optimal Schedule' above!</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--gray-400); padding: 1.5rem;">No schedule generated yet. Click 'Generate Optimal Schedule' above!</td></tr>`;
     return;
   }
 
@@ -450,7 +446,6 @@ function renderSummaryTable() {
       <td>${m.days_worked} days</td>
       <td>${m.shift_count} shifts</td>
       <td>${m.avg_shift_hours} hrs</td>
-      <td><span class="badge-burn" style="background: var(--gray-100); color: var(--gray-700); border-color: var(--gray-300);">${m.preference === 'daily_short' ? '~2h Everyday' : 'Fewer Days'}</span></td>
     `;
     tbody.appendChild(tr);
   });
@@ -505,12 +500,6 @@ function toggleMasterCell(td, key, mode) {
 
 async function syncMasterPainter() {
   if (!state.selectedMasterMemberId) return;
-
-  const currentMember = state.members.find(m => m.id === state.selectedMasterMemberId);
-  if (currentMember) {
-    document.getElementById("pref-daily").checked = currentMember.shift_preference === "daily_short";
-    document.getElementById("pref-longer").checked = currentMember.shift_preference === "fewer_long";
-  }
 
   try {
     const res = await fetch(`/api/members/${state.selectedMasterMemberId}/master-schedule`);
@@ -593,24 +582,6 @@ function clearMasterSchedule() {
     document.querySelectorAll("#master-painter-tbody .painter-cell").forEach(td => {
       td.classList.remove("cell-busy");
     });
-  }
-}
-
-async function updateMemberPref(newPref) {
-  if (!state.selectedMasterMemberId) return;
-  const m = state.members.find(x => x.id === state.selectedMasterMemberId);
-  if (!m) return;
-  m.shift_preference = newPref;
-
-  try {
-    await fetch(`/api/members/${m.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(m),
-    });
-    showToast(`Updated shift preference to: ${newPref === 'daily_short' ? '~2h Everyday' : 'Fewer Days'}`);
-  } catch (err) {
-    console.error("Failed to update pref:", err);
   }
 }
 
@@ -753,7 +724,7 @@ function clearWeeklyOverrides() {
   }
 }
 
-// ----------------- Roster & Preferences -----------------
+// ----------------- Roster Settings -----------------
 
 function renderRosterCards() {
   const container = document.getElementById("roster-cards-container");
@@ -777,19 +748,7 @@ function renderRosterCards() {
         <button class="btn btn-secondary btn-sm" onclick="openMemberModal('${m.id}')">Edit</button>
       </div>
 
-      <div class="pref-radio-group">
-        <div style="font-size: 0.75rem; font-weight: 700; color: var(--gray-600); text-transform: uppercase;">Shift Style</div>
-        <label>
-          <input type="radio" name="roster-pref-${m.id}" value="daily_short" ${m.shift_preference === 'daily_short' ? 'checked' : ''} onchange="handleRosterPrefChange('${m.id}', 'daily_short')">
-          <span>~2 Hours Everyday</span>
-        </label>
-        <label>
-          <input type="radio" name="roster-pref-${m.id}" value="fewer_long" ${m.shift_preference === 'fewer_long' ? 'checked' : ''} onchange="handleRosterPrefChange('${m.id}', 'fewer_long')">
-          <span>Fewer Days (3–5h Shifts)</span>
-        </label>
-      </div>
-
-      <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--gray-600); border-top: 1px solid var(--gray-200); padding-top: 0.5rem;">
+      <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--gray-600); border-top: 1px solid var(--gray-200); padding-top: 0.5rem; margin-top: 0.5rem;">
         <span>Weight: <strong>${m.weight}x</strong></span>
         <span>Target: <strong>${m.active ? (168 / state.members.filter(x => x.active).length).toFixed(1) : 0} hrs/wk</strong></span>
       </div>
@@ -797,22 +756,6 @@ function renderRosterCards() {
     container.appendChild(card);
   });
 }
-
-window.handleRosterPrefChange = async function(memberId, pref) {
-  const m = state.members.find(x => x.id === memberId);
-  if (!m) return;
-  m.shift_preference = pref;
-  try {
-    await fetch(`/api/members/${m.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(m),
-    });
-    showToast(`Updated ${m.name}'s preference to ${pref === 'daily_short' ? '~2h Everyday' : 'Fewer Days'}`);
-  } catch (err) {
-    console.error(err);
-  }
-};
 
 window.openMemberModal = function(memberId) {
   const modal = document.getElementById("modal-member");
@@ -825,7 +768,6 @@ window.openMemberModal = function(memberId) {
     document.getElementById("edit-member-id").value = m.id;
     document.getElementById("edit-member-name").value = m.name;
     document.getElementById("edit-member-email").value = m.email || "";
-    document.getElementById("edit-member-pref").value = m.shift_preference;
     document.getElementById("edit-member-weight").value = m.weight;
     document.getElementById("edit-member-color").value = m.color;
     document.getElementById("edit-member-active").checked = m.active;
@@ -835,7 +777,6 @@ window.openMemberModal = function(memberId) {
     document.getElementById("edit-member-id").value = "";
     document.getElementById("edit-member-name").value = "";
     document.getElementById("edit-member-email").value = "";
-    document.getElementById("edit-member-pref").value = "daily_short";
     document.getElementById("edit-member-weight").value = "1.0";
     document.getElementById("edit-member-color").value = "#2563EB";
     document.getElementById("edit-member-active").checked = true;
@@ -854,7 +795,7 @@ async function handleMemberFormSubmit(e) {
   const memberData = {
     name: document.getElementById("edit-member-name").value.trim(),
     email: document.getElementById("edit-member-email").value.trim(),
-    shift_preference: document.getElementById("edit-member-pref").value,
+    shift_preference: "daily_short",
     weight: parseFloat(document.getElementById("edit-member-weight").value) || 1.0,
     color: document.getElementById("edit-member-color").value,
     active: document.getElementById("edit-member-active").checked,

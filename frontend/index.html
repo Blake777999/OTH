@@ -168,7 +168,6 @@
               <th>Days Worked</th>
               <th>Shifts</th>
               <th>Avg Shift</th>
-              <th>Shift Preference</th>
             </tr>
           </thead>
           <tbody id="summary-table-tbody">
@@ -186,20 +185,6 @@
           <select id="master-member-select" class="btn btn-secondary" style="padding: 0.4rem 0.8rem; font-weight: 600; min-width: 180px;">
             <!-- Members injected via JS -->
           </select>
-
-          <span style="border-left: 1px solid var(--gray-300); height: 24px; margin: 0 0.5rem;"></span>
-
-          <label style="font-weight: 600; font-size: 0.85rem;">Shift Preference:</label>
-          <div class="action-group" style="gap: 0.5rem;">
-            <label style="font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
-              <input type="radio" name="master-pref" value="daily_short" id="pref-daily">
-              <span>~2 Hours Everyday</span>
-            </label>
-            <label style="font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem; cursor: pointer; margin-left: 0.5rem;">
-              <input type="radio" name="master-pref" value="fewer_long" id="pref-longer">
-              <span>Fewer Days (3–5h shifts)</span>
-            </label>
-          </div>
         </div>
 
         <div class="action-group">
@@ -283,11 +268,11 @@
       </div>
     </section>
 
-    <!-- ==================== TAB 4: GROUP ROSTER & PREFERENCES ==================== -->
+    <!-- ==================== TAB 4: GROUP ROSTER ==================== -->
     <section id="tab-roster" class="view-section">
       <div class="action-bar">
         <div>
-          <h3 style="font-size: 1.1rem; font-weight: 700;">Group Members & Shift Preferences</h3>
+          <h3 style="font-size: 1.1rem; font-weight: 700;">Group Members & Roster Settings</h3>
           <p style="font-size: 0.8rem; color: var(--gray-500);">
             Currently 12 active members (14 hours each). Jared is ready to be activated as the 13th member (~13 hours each).
           </p>
@@ -435,7 +420,7 @@
             <li>Exact staffing: 1 person at Burn + 1 person at THC from 9am to 9pm (168h total).</li>
             <li>Equal hours: ~14.0 hrs/person across active members.</li>
             <li>Respect master schedule busy times & weekly overrides.</li>
-            <li>Honor shift preferences: ~2h daily vs fewer longer blocks.</li>
+            <li>Target 2.0–2.5 hours/day in single continuous sittings (no split shifts).</li>
           </ul>
         </div>
 
@@ -468,14 +453,6 @@
         <div>
           <label style="display: block; font-weight: 600; margin-bottom: 0.35rem;">Email (Optional):</label>
           <input type="email" id="edit-member-email" style="width: 100%; padding: 0.5rem; border: 1px solid var(--gray-300); border-radius: 6px;">
-        </div>
-
-        <div>
-          <label style="display: block; font-weight: 600; margin-bottom: 0.35rem;">Shift Style Preference:</label>
-          <select id="edit-member-pref" style="width: 100%; padding: 0.5rem; border: 1px solid var(--gray-300); border-radius: 6px;">
-            <option value="daily_short">~2 Hours Everyday (Spread out over 6–7 days)</option>
-            <option value="fewer_long">Fewer Days, Longer Shifts (3–5 hours over 3–4 days)</option>
-          </select>
         </div>
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
