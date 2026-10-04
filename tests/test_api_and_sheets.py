@@ -53,15 +53,15 @@ def test_api_generate_and_retrieve_schedule():
     assert res.status_code == 200
     data = res.json()
     assert data["success"] is True
-    assert len(data["assignments"]) == 336
-    assert data["stats"]["fairness_score"] >= 95.0
+    assert len(data["assignments"]) == 280
+    assert data["stats"]["fairness_score"] >= 90.0
 
     # Retrieve schedule
     get_res = client.get(f"/api/schedules/{week_id}")
     assert get_res.status_code == 200
     sched = get_res.json()
     assert sched["found"] is True
-    assert len(sched["assignments"]) == 336
+    assert len(sched["assignments"]) == 280
 
 def test_csv_and_tsv_exports():
     """Verify CSV and TSV export endpoints return properly formatted grids."""

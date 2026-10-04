@@ -30,7 +30,7 @@ const state = {
 };
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const SLOTS_PER_DAY = 24;
+const SLOTS_PER_DAY = 20;
 const START_HOUR = 9;
 
 // Helpers
@@ -298,7 +298,9 @@ function renderMetrics() {
       document.getElementById("metric-coverage").style.color = "#dc2626";
     } else {
       document.getElementById("metric-coverage").textContent = "100%";
-      document.getElementById("metric-coverage-sub").textContent = "336 / 336 slots (168h)";
+      const totalH = s.total_demand_hours || 140;
+      const totalS = Math.round(totalH * 2);
+      document.getElementById("metric-coverage-sub").textContent = `${totalS} / ${totalS} slots (${totalH}h)`;
       document.getElementById("metric-coverage").style.color = "";
     }
 
@@ -765,7 +767,7 @@ function renderRosterCards() {
 
       <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--gray-600); border-top: 1px solid var(--gray-200); padding-top: 0.5rem; margin-top: 0.5rem;">
         <span>Weight: <strong>${m.weight}x</strong></span>
-        <span>Target: <strong>${m.active ? (168 / state.members.filter(x => x.active).length).toFixed(1) : 0} hrs/wk</strong></span>
+        <span>Target: <strong>${m.active ? (140 / state.members.filter(x => x.active).length).toFixed(1) : 0} hrs/wk</strong></span>
       </div>
     `;
     container.appendChild(card);

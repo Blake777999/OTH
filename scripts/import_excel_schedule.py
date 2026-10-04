@@ -73,10 +73,10 @@ def import_availability():
                 if std_name in name_to_id:
                     col_to_member[col] = (name_to_id[std_name], std_name)
 
-        # Process 24 slots (9am to 9pm)
+        # Process 20 slots (9am to 7pm)
         for col, (mid, mname) in col_to_member.items():
             busy_slots = []
-            for slot_idx in range(24):
+            for slot_idx in range(20):
                 row_num = header_row + 1 + slot_idx
                 cell_val = ws.cell(row_num, col).value
                 has_x = str(cell_val or "").strip().upper() == "X"

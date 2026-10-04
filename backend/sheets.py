@@ -149,7 +149,7 @@ def generate_excel_for_sheets(
     ws_sched.row_dimensions[2].height = 22
 
     # Row 3: Subheader: Time Range | Burn | THC | Burn | THC ...
-    ws_sched["A3"] = "9:00 AM - 9:00 PM"
+    ws_sched["A3"] = "9:00 AM - 7:00 PM"
     ws_sched["A3"].font = Font(name="Calibri", size=9, italic=True, color="64748B")
     ws_sched["A3"].alignment = align_center
     ws_sched["A3"].border = cell_border
@@ -254,7 +254,7 @@ def generate_excel_for_sheets(
 
     # Calculate summary rows
     active_members = [m for m in members if m.active]
-    target_hours = round(168.0 / max(len(active_members), 1), 1)
+    target_hours = round(140.0 / max(len(active_members), 1), 1)
 
     member_stats = {}
     for m in active_members:

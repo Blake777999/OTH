@@ -253,7 +253,7 @@ def api_get_schedule(week_id: str):
     if not stats:
         members = get_all_members(only_active=True)
         opt = ScheduleOptimizer(members, [], [])
-        stats = opt._compute_stats(assignments, set(), {i: round(336/len(members)) for i in range(len(members))})
+        stats = opt._compute_stats(assignments, set(), {i: round(opt.total_demand_slots/len(members)) for i in range(len(members))})
 
     dates = get_week_dates(week_id)
 

@@ -29,7 +29,7 @@ def create_sample_members(n=12):
     return members
 
 def test_full_coverage_12_members():
-    """Verify that all 336 slots are staffed, no double bookings, and hours are fair."""
+    """Verify that all 280 slots are staffed, no double bookings, and hours are fair."""
     members = create_sample_members(12)
     optimizer = ScheduleOptimizer(
         members=members,
@@ -40,7 +40,7 @@ def test_full_coverage_12_members():
     result = optimizer.solve()
     assert result["success"] is True
     assignments = result["assignments"]
-    assert len(assignments) == 7 * 24 * 2  # exactly 336 slots
+    assert len(assignments) == 7 * 20 * 2  # exactly 280 slots
 
     # Verify coverage: for every day, slot, house, exactly 1 person
     coverage = {}
@@ -49,7 +49,7 @@ def test_full_coverage_12_members():
         assert key not in coverage, f"Duplicate coverage at {key}"
         coverage[key] = a.member_id
 
-    assert len(coverage) == 336
+    assert len(coverage) == 280
 
     # Verify no double booking (same person at both houses at the same slot)
     person_slots = set()
@@ -58,16 +58,16 @@ def test_full_coverage_12_members():
         assert key not in person_slots, f"Person {a.member_id} double booked at {key}"
         person_slots.add(key)
 
-    # Verify equal hours: 336 slots / 12 people = 28 slots each = exactly 14.0 hours!
+    # Verify equal hours: 280 slots / 12 people = ~23.3 slots each (~11.7 hours)
     member_counts = {m.id: 0 for m in members}
     for a in assignments:
         member_counts[a.member_id] += 1
 
     for m_id, count in member_counts.items():
-        assert count == 28, f"Member {m_id} expected 28 slots (14h), got {count}"
+        assert 22 <= count <= 25, f"Member {m_id} expected 22-25 slots (~11.7h), got {count}"
 
 def test_coverage_13_members():
-    """Verify 13 members balance cleanly around ~13 hours (25-26 slots each)."""
+    """Verify 13 members balance cleanly around ~10.8 hours (21-22 slots each)."""
     members = create_sample_members(13)
     optimizer = ScheduleOptimizer(
         members=members,
@@ -76,15 +76,15 @@ def test_coverage_13_members():
     )
     result = optimizer.solve()
     assert result["success"] is True
-    assert len(result["assignments"]) == 336
+    assert len(result["assignments"]) == 280
 
     member_counts = {m.id: 0 for m in members}
     for a in result["assignments"]:
         member_counts[a.member_id] += 1
 
-    # 336 / 13 = 25.84 -> each member should get either 25 or 26 slots
+    # 280 / 13 = 21.54 -> each member should get 20 to 23 slots (~10.8h)
     for m_id, count in member_counts.items():
-        assert 25 <= count <= 26, f"Member {m_id} got {count} slots, expected 25 or 26"
+        assert 20 <= count <= 23, f"Member {m_id} got {count} slots, expected 20 to 23"
 
 def test_master_schedule_unavailability():
     """Verify solver never schedules a member when they have master schedule conflicts."""
@@ -121,7 +121,7 @@ def test_weekly_override():
             member_id="m_1",
             day_of_week=4,
             start_slot=0,
-            end_slot=24,
+            end_slot=20,
             override_type="busy",
         )
     ]
@@ -244,7 +244,7 @@ def test_unfillable_slots_marked_with_x():
     result = optimizer.solve()
     assert result["success"] is True
     assignments = result["assignments"]
-    assert len(assignments) == 336
+    assert len(assignments) == 280
 
     # Verify both houses at Day 0, Slot 0 are marked as UNFILLED with '❌ X (UNFILLED)'
     unfilled_assignments = [

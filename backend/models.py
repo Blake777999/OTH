@@ -12,8 +12,8 @@ DB_PATH = DATA_DIR / "scheduler.db"
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 HOUSES = ["Burn", "THC"]
 START_HOUR = 9   # 9 AM
-END_HOUR = 21    # 9 PM
-SLOTS_PER_DAY = 24  # 24 half-hour slots per day: 0 = 9:00-9:30, ..., 23 = 20:30-21:00
+END_HOUR = 19    # 7 PM
+SLOTS_PER_DAY = 20  # 20 half-hour slots per day: 0 = 9:00-9:30, ..., 19 = 18:30-19:00
 
 # Distinct accessible colors for members on the schedule grid
 MEMBER_COLORS = [
@@ -34,7 +34,7 @@ MEMBER_COLORS = [
 ]
 
 def slot_to_time_str(slot_idx: int) -> str:
-    """Converts a slot index (0..23) to a human-readable time string like '9:00 AM'."""
+    """Converts a slot index (0..19) to a human-readable time string like '9:00 AM'."""
     total_minutes = START_HOUR * 60 + slot_idx * 30
     hour = total_minutes // 60
     minute = total_minutes % 60
@@ -70,8 +70,8 @@ class MasterScheduleItem(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     member_id: str
     day_of_week: int  # 0 = Monday, 6 = Sunday
-    start_slot: int   # 0..23
-    end_slot: int     # 1..24 (exclusive)
+    start_slot: int   # 0..19
+    end_slot: int     # 1..20 (exclusive)
     label: str = "Busy"
 
 class WeeklyOverrideItem(BaseModel):

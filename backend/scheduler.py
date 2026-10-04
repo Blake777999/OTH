@@ -46,7 +46,7 @@ class ScheduleOptimizer:
         self.slots = SLOTS_PER_DAY     # 24
         self.houses = HOUSES           # ["Burn", "THC"]
         self.num_houses = len(self.houses)
-        self.total_demand_slots = self.days * self.slots * self.num_houses # 336 slots (168 hours)
+        self.total_demand_slots = self.days * self.slots * self.num_houses # 280 slots (140 hours)
 
     def _build_availability_matrix(self) -> Dict[Tuple[int, int, int], bool]:
         """
@@ -196,8 +196,8 @@ class ScheduleOptimizer:
             if all(abs(m.weight - 1.0) < 1e-4 for m in self.members):
                 # Standard equal weighting
                 t = round(effective_demand / self.num_members)
-                t_min = fair_floor
-                t_max = fair_ceil
+                t_min = max(0, fair_floor - 1)
+                t_max = min(effective_demand, fair_ceil + 1)
             else:
                 t = round(effective_demand * (member.weight / total_weight))
                 t_min = max(0, t - 1)
@@ -544,12 +544,14 @@ class ScheduleOptimizer:
             m: sum(1 for d in range(self.days) for s in range(self.slots) if avail[(m, d, s)])
             for m in range(self.num_members)
         }
+        fallback_floor = max(0, fair_floor - 2)
+        fallback_ceil = min(self.total_demand_slots, fair_ceil + 2)
         dev_terms = []
         for m in range(self.num_members):
             actual = sum(x[m, d, s, h] for d in range(self.days) for s in range(self.slots) for h in range(self.num_houses))
-            if avail_count[m] >= fair_floor:
-                model.Add(actual >= min(fair_floor, avail_count[m]))
-                model.Add(actual <= fair_ceil)
+            if avail_count[m] >= fallback_floor:
+                model.Add(actual >= min(fallback_floor, avail_count[m]))
+                model.Add(actual <= fallback_ceil)
             diff = model.NewIntVar(-self.total_demand_slots, self.total_demand_slots, f"diff_{m}")
             model.Add(diff == actual - fair_floor)
             abs_diff = model.NewIntVar(0, self.total_demand_slots, f"abs_{m}")
@@ -683,7 +685,7 @@ class ScheduleOptimizer:
         hours_list = []
         for m_idx, m in enumerate(self.members):
             h_data = member_hours.get(m.id, {"slots": 0, "hours": 0.0, "burn_hours": 0.0, "thc_hours": 0.0})
-            target_h = target_slots.get(m_idx, 28) * 0.5
+            target_h = target_slots.get(m_idx, round(self.total_demand_slots / max(1, self.num_members))) * 0.5
             hours_list.append(h_data["hours"])
             member_summaries.append({
                 "id": m.id,
@@ -710,7 +712,7 @@ class ScheduleOptimizer:
         coverage_pct = round((filled_count / max(1, len(assignments))) * 100, 1)
 
         return {
-            "total_demand_hours": 168.0,
+            "total_demand_hours": self.total_demand_slots * 0.5,
             "active_members_count": self.num_members,
             "avg_hours_per_member": round(avg_hours, 1),
             "fairness_score": fairness_score,
