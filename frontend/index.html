@@ -22,6 +22,10 @@
           <span class="badge-burn">🔥 Burn House</span>
           <span class="badge-thc">🌿 THC House</span>
         </div>
+        <div id="db-status-badge" class="db-status-badge" title="Database Storage Status">
+          <span id="db-status-dot" class="status-dot"></span>
+          <span id="db-status-text">Checking storage...</span>
+        </div>
       </div>
 
       <!-- Week Selector -->
@@ -49,12 +53,30 @@
         <button class="tab-btn" data-tab="tab-sheets">
           <span>📊</span> Google Sheets
         </button>
+        <button class="tab-btn" data-tab="tab-backup">
+          <span>💾</span> Backup & Sync
+        </button>
       </nav>
     </div>
   </header>
 
   <!-- Main View Container -->
   <main class="main-container">
+
+    <!-- Server Reset / Recovery Alert Banner -->
+    <div id="recovery-alert" class="recovery-banner" style="display: none;">
+      <div class="recovery-content">
+        <span class="recovery-icon">⚠️</span>
+        <div>
+          <strong>Server Restart Detected (Render free-tier):</strong>
+          <span id="recovery-text">Your previous weekly exceptions and roster settings were saved in your browser.</span>
+        </div>
+      </div>
+      <div class="recovery-actions">
+        <button id="btn-restore-cache" class="btn btn-warning btn-sm" style="font-weight: 700;">⚡ Restore Saved Settings</button>
+        <button id="btn-dismiss-recovery" class="btn btn-secondary btn-sm">Dismiss</button>
+      </div>
+    </div>
 
     <!-- ==================== TAB 1: WEEKLY SCHEDULE VIEW ==================== -->
     <section id="tab-schedule" class="view-section active">
@@ -370,6 +392,66 @@
       </div>
     </section>
 
+    <!-- ==================== TAB 6: BACKUP & DATA PERSISTENCE ==================== -->
+    <section id="tab-backup" class="view-section">
+      <div class="card" style="max-width: 850px; margin: 0 auto; padding: 2rem;">
+        <div style="border-bottom: 1px solid var(--gray-200); padding-bottom: 1rem; margin-bottom: 1.5rem;">
+          <h2 style="font-size: 1.4rem; font-weight: 700; margin-bottom: 0.25rem;">💾 Data Persistence & Backup</h2>
+          <p style="font-size: 0.875rem; color: var(--gray-600);">
+            Prevent data loss from Render free-tier spin-downs and container rebuilds.
+          </p>
+        </div>
+
+        <!-- Current Storage Status -->
+        <div style="background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem;">
+          <div style="font-size: 0.8rem; font-weight: 600; text-transform: uppercase; color: var(--gray-500); margin-bottom: 0.5rem;">Current Active Storage Engine</div>
+          <div id="backup-engine-display" style="font-size: 1.1rem; font-weight: 600; display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+            <span id="backup-engine-dot" class="status-dot"></span>
+            <span id="backup-engine-title">Checking database...</span>
+          </div>
+          <p id="backup-engine-desc" style="font-size: 0.85rem; color: var(--gray-600); margin: 0;">
+            Checking connection...
+          </p>
+        </div>
+
+        <!-- One-Click Full Backup & Restore -->
+        <div style="border: 1px solid var(--gray-200); border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem;">
+          <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 0.5rem;">One-Click Backup & Restore</h3>
+          <p style="font-size: 0.85rem; color: var(--gray-600); margin-bottom: 1rem;">
+            Download your entire system (all members, active/inactive statuses, master availability, weekly exceptions, and generated schedules) as a single JSON backup file. You can restore this file at any time.
+          </p>
+          <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
+            <a href="/api/system/backup" download class="btn btn-primary" id="btn-download-backup">
+              <span>📥</span> Download Full Backup (.json)
+            </a>
+            <label class="btn btn-secondary" style="cursor: pointer; margin: 0;">
+              <span>📤</span> Restore from Backup File
+              <input type="file" id="input-restore-file" accept=".json" style="display: none;">
+            </label>
+            <span id="restore-status-msg" style="font-size: 0.85rem; color: var(--gray-600);"></span>
+          </div>
+        </div>
+
+        <!-- Cloud Database Setup Guide -->
+        <div style="border: 1px solid var(--gray-200); border-radius: 8px; padding: 1.25rem;">
+          <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 0.5rem;">Permanent Cloud Storage (Supabase, Neon, or Render Postgres)</h3>
+          <p style="font-size: 0.85rem; color: var(--gray-600); margin-bottom: 0.75rem;">
+            By default, Render's free tier resets the local SQLite database whenever the service sleeps after 15 minutes of inactivity or gets updated. Connecting a free cloud PostgreSQL database makes all data 100% permanent across all devices.
+          </p>
+          <ol style="font-size: 0.85rem; color: var(--gray-700); padding-left: 1.25rem; line-height: 1.6; margin-bottom: 0.5rem;">
+            <li>Create or open your project on <a href="https://supabase.com" target="_blank" style="color: var(--primary); font-weight: 600;">Supabase</a> (or <a href="https://neon.tech" target="_blank" style="color: var(--primary); font-weight: 600;">Neon.tech</a>).</li>
+            <li>In Supabase, go to <strong>Project Settings &rarr; Database &rarr; Connection string</strong>, select <strong>URI</strong>, and copy the <strong>Connection Pooler</strong> URI (mode: <em>Session</em>, port 5432 or 6543). Replace <code>[YOUR-PASSWORD]</code> with your database password.</li>
+            <li>In your Render Dashboard for this web service, go to <strong>Environment &rarr; Add Environment Variable</strong>:
+              <div style="margin-top: 0.35rem; margin-bottom: 0.35rem; background: var(--gray-100); padding: 0.4rem 0.6rem; border-radius: 4px; font-family: monospace; font-size: 0.8rem;">
+                Key: DATABASE_URL<br>Value: postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
+              </div>
+            </li>
+            <li>Click <strong>Save Changes</strong>. Render will automatically redeploy and initialize your new permanent database with all members and master schedules!</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <!-- Modal: Generate Schedule -->
@@ -489,6 +571,6 @@
   <!-- Toast Notification Container -->
   <div class="toast-container" id="toast-container"></div>
 
-  <script src="/static/app.js?v=20261004-1"></script>
+  <script src="/static/app.js?v=20261004-2"></script>
 </body>
 </html>

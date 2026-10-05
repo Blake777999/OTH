@@ -26,6 +26,9 @@ from backend.models import (
     get_all_scheduled_weeks,
     get_config,
     set_config,
+    get_db_info,
+    export_full_backup,
+    import_full_backup,
     Member,
     MasterScheduleItem,
     WeeklyOverrideItem,
@@ -407,6 +410,32 @@ def api_sync_google_sheet(week_id: str):
     if result["success"]:
         set_config("sheets_last_synced", datetime.now().isoformat())
     return result
+
+# ----------------- System & Persistence Endpoints -----------------
+
+@app.get("/api/system/info")
+def api_get_system_info():
+    return get_db_info()
+
+@app.get("/api/system/backup")
+def api_export_backup():
+    backup = export_full_backup()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    headers = {
+        "Content-Disposition": f'attachment; filename="oth_backup_{timestamp}.json"'
+    }
+    return Response(
+        content=json.dumps(backup, indent=2),
+        media_type="application/json",
+        headers=headers,
+    )
+
+@app.post("/api/system/restore")
+def api_import_backup(payload: Dict[str, Any] = Body(...)):
+    try:
+        return import_full_backup(payload)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to restore backup: {str(e)}")
 
 # ----------------- Static Frontend -----------------
 

@@ -36,7 +36,8 @@ def import_availability():
         print(f"Error: {EXCEL_PATH} not found!")
         return False
 
-    conn = sqlite3.connect(DB_PATH)
+    from backend.models import get_db_connection
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     # Load member database mapping

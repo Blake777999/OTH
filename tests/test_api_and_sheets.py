@@ -125,3 +125,25 @@ def test_xlsx_export_for_google_sheets():
     assert ws_sum["B2"].value == "Assigned Hours"
     assert ws_sum["C2"].value == "Target Hours"
     assert ws_sum.max_row >= 14 # 12 members + header + title
+
+def test_system_info_and_backup_restore():
+    """Verify system info, export backup, and restore endpoints."""
+    res_info = client.get("/api/system/info")
+    assert res_info.status_code == 200
+    info = res_info.json()
+    assert "engine" in info
+    assert "persistent" in info
+
+    res_backup = client.get("/api/system/backup")
+    assert res_backup.status_code == 200
+    backup_data = res_backup.json()
+    assert "members" in backup_data
+    assert "master_schedules" in backup_data
+    assert len(backup_data["members"]) >= 12
+
+    res_restore = client.post("/api/system/restore", json=backup_data)
+    assert res_restore.status_code == 200
+    restore_res = res_restore.json()
+    assert restore_res["success"] is True
+    assert restore_res["counts"]["members"] >= 12
+

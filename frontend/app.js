@@ -77,11 +77,15 @@ function safeAddListener(id, event, handler) {
 document.addEventListener("DOMContentLoaded", async () => {
   try { setupNavigation(); } catch (e) { console.error("setupNavigation error:", e); }
   try { setupEventListeners(); } catch (e) { console.error("setupEventListeners error:", e); }
+  try { await initSystemInfo(); } catch (e) { console.error("initSystemInfo error:", e); }
   
   // Fetch initial weeks and members
   try { await loadWeeks(); } catch (e) { console.error("loadWeeks error:", e); }
   try { await loadMembers(); } catch (e) { console.error("loadMembers error:", e); }
   try { await loadSchedule(); } catch (e) { console.error("loadSchedule error:", e); }
+
+  // Check if browser has saved recovery state from spin-down
+  try { await checkServerResetRecovery(); } catch (e) { console.error("checkServerResetRecovery error:", e); }
 
   // Setup painter grids
   try { buildMasterPainterTable(); } catch (e) { console.error("buildMasterPainterTable error:", e); }
@@ -107,12 +111,15 @@ function setupNavigation() {
         syncOverridePainter();
       } else if (target === "tab-roster") {
         renderRosterCards();
+      } else if (target === "tab-backup") {
+        initSystemInfo();
       }
     });
   });
 }
 
 function setupEventListeners() {
+  try { setupBackupHandlers(); } catch (e) { console.error("setupBackupHandlers error:", e); }
   // Week navigation
   safeAddListener("btn-prev-week", "click", () => navigateWeek(-1));
   safeAddListener("btn-next-week", "click", () => navigateWeek(1));
@@ -587,6 +594,7 @@ async function saveMasterSchedule() {
     });
     if (res.ok) {
       showToast("Master schedule saved!");
+      cacheMasterSchedule(state.selectedMasterMemberId, items);
     }
   } catch (err) {
     showToast("Error saving master schedule", "error");
@@ -726,6 +734,7 @@ async function saveWeeklyOverrides() {
     });
     if (res.ok) {
       showToast("Weekly exceptions saved!");
+      cacheWeeklyOverrides(state.currentWeekId, state.selectedOverrideMemberId, items);
     }
   } catch (err) {
     showToast("Error saving exceptions", "error");
@@ -837,6 +846,7 @@ async function handleMemberFormSubmit(e) {
     }
     closeMemberModal();
     await loadMembers();
+    cacheMembers();
   } catch (err) {
     showToast("Failed to save member", "error");
   }
@@ -853,6 +863,7 @@ async function handleMemberDelete() {
       showToast(`Deleted ${name}`);
       closeMemberModal();
       await loadMembers();
+      cacheMembers();
     } catch (err) {
       showToast("Failed to delete member", "error");
     }
@@ -921,3 +932,246 @@ async function copyForGoogleSheets() {
     showToast("Clipboard copy failed. Try downloading CSV instead.", "error");
   }
 }
+
+// ----------------- Data Persistence, Backup & Spin-Down Recovery -----------------
+
+function cacheMembers() {
+  try {
+    if (state.members && state.members.length > 0) {
+      localStorage.setItem("oth_saved_members", JSON.stringify(state.members));
+    }
+  } catch (e) {
+    console.error("Failed to cache members:", e);
+  }
+}
+
+function cacheWeeklyOverrides(weekId, memberId, items) {
+  try {
+    const cached = JSON.parse(localStorage.getItem("oth_saved_overrides") || "{}");
+    cached[weekId] = cached[weekId] || {};
+    cached[weekId][memberId] = items;
+    localStorage.setItem("oth_saved_overrides", JSON.stringify(cached));
+  } catch (e) {
+    console.error("Failed to cache overrides:", e);
+  }
+}
+
+function cacheMasterSchedule(memberId, items) {
+  try {
+    const cached = JSON.parse(localStorage.getItem("oth_saved_master") || "{}");
+    cached[memberId] = items;
+    localStorage.setItem("oth_saved_master", JSON.stringify(cached));
+  } catch (e) {
+    console.error("Failed to cache master schedule:", e);
+  }
+}
+
+async function initSystemInfo() {
+  try {
+    const res = await fetch("/api/system/info");
+    const info = await res.json();
+
+    const statusBadge = document.getElementById("db-status-badge");
+    const statusDot = document.getElementById("db-status-dot");
+    const statusText = document.getElementById("db-status-text");
+
+    const engineDot = document.getElementById("backup-engine-dot");
+    const engineTitle = document.getElementById("backup-engine-title");
+    const engineDesc = document.getElementById("backup-engine-desc");
+
+    if (info.persistent) {
+      if (statusDot) statusDot.className = "status-dot green";
+      if (statusText) statusText.textContent = "Cloud DB (Postgres)";
+      if (statusBadge) statusBadge.title = "Connected to persistent PostgreSQL database: " + (info.safe_url || "Cloud Postgres");
+
+      if (engineDot) engineDot.className = "status-dot green";
+      if (engineTitle) engineTitle.textContent = "PostgreSQL (Permanent Cloud Storage)";
+      if (engineDesc) {
+        engineDesc.textContent = `Connected to permanent cloud database (${info.safe_url || 'PostgreSQL'}). All calendar inputs, active members, and schedules are 100% permanent across sleeps, spin-downs, and upgrades.`;
+      }
+    } else {
+      if (statusDot) statusDot.className = "status-dot amber";
+      if (statusText) statusText.textContent = "Local SQLite (Ephemeral)";
+      if (statusBadge) statusBadge.title = "Render free tier sleeps and wipes local SQLite. Connect PostgreSQL or use Backup & Sync.";
+
+      if (engineDot) engineDot.className = "status-dot amber";
+      if (engineTitle) engineTitle.textContent = "Local SQLite (Ephemeral on Render Free Tier)";
+      if (engineDesc) {
+        engineDesc.textContent = "Render resets this local database when the site sleeps after 15 minutes of inactivity or upon redeploy. Connect a free cloud PostgreSQL database (Neon.tech or Render) using DATABASE_URL, or use the backup tools below.";
+      }
+    }
+  } catch (err) {
+    console.error("Failed to load system info:", err);
+  }
+}
+
+async function checkServerResetRecovery() {
+  try {
+    const cachedMembersStr = localStorage.getItem("oth_saved_members");
+    const cachedOverridesStr = localStorage.getItem("oth_saved_overrides");
+    if (!cachedMembersStr && !cachedOverridesStr) return;
+
+    let needsRecovery = false;
+    let reasons = [];
+
+    // 1. Check if member active status in browser cache differs from server
+    if (cachedMembersStr && state.members.length > 0) {
+      const cachedMembers = JSON.parse(cachedMembersStr);
+      const serverMap = new Map(state.members.map(m => [m.id, m]));
+      for (const cm of cachedMembers) {
+        const sm = serverMap.get(cm.id);
+        if (sm && sm.active !== cm.active) {
+          needsRecovery = true;
+          reasons.push(`${cm.name} was ${cm.active ? 'Active' : 'Inactive'}`);
+        }
+      }
+    }
+
+    // 2. Check if weekly overrides exist in cache but are missing on server
+    if (cachedOverridesStr && state.currentWeekId) {
+      const cachedOverrides = JSON.parse(cachedOverridesStr);
+      const weekOverrides = cachedOverrides[state.currentWeekId];
+      if (weekOverrides) {
+        const cachedCount = Object.values(weekOverrides).flat().length;
+        if (cachedCount > 0) {
+          const res = await fetch(`/api/weekly-overrides?week_id=${state.currentWeekId}`);
+          if (res.ok) {
+            const serverOverrides = await res.json();
+            if (serverOverrides.length === 0) {
+              needsRecovery = true;
+              reasons.push(`${cachedCount} saved weekly exception(s) for ${state.currentWeekId}`);
+            }
+          }
+        }
+      }
+    }
+
+    if (needsRecovery) {
+      const banner = document.getElementById("recovery-alert");
+      const recText = document.getElementById("recovery-text");
+      if (banner && recText) {
+        recText.textContent = `Your saved browser settings (${reasons.join(", ")}) can be restored now.`;
+        banner.style.display = "flex";
+      }
+    }
+  } catch (err) {
+    console.error("Error checking recovery status:", err);
+  }
+}
+
+async function restoreSavedSettingsFromCache() {
+  const btn = document.getElementById("btn-restore-cache");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Restoring...";
+  }
+
+  try {
+    const cachedMembersStr = localStorage.getItem("oth_saved_members");
+    const cachedOverridesStr = localStorage.getItem("oth_saved_overrides");
+
+    if (cachedMembersStr) {
+      const cachedMembers = JSON.parse(cachedMembersStr);
+      for (const cm of cachedMembers) {
+        await fetch(`/api/members/${cm.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(cm),
+        });
+      }
+    }
+
+    if (cachedOverridesStr) {
+      const cachedOverrides = JSON.parse(cachedOverridesStr);
+      for (const [wId, memberMap] of Object.entries(cachedOverrides)) {
+        for (const [mId, items] of Object.entries(memberMap)) {
+          if (items && items.length > 0) {
+            await fetch(`/api/members/${mId}/weekly-overrides?week_id=${wId}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(items),
+            });
+          }
+        }
+      }
+    }
+
+    const cachedMasterStr = localStorage.getItem("oth_saved_master");
+    if (cachedMasterStr) {
+      const cachedMaster = JSON.parse(cachedMasterStr);
+      for (const [mId, items] of Object.entries(cachedMaster)) {
+        if (items && items.length > 0) {
+          await fetch(`/api/members/${mId}/master-schedule`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(items),
+          });
+        }
+      }
+    }
+
+    showToast("Restored saved settings from browser cache!");
+    const banner = document.getElementById("recovery-alert");
+    if (banner) banner.style.display = "none";
+
+    await loadMembers();
+    await loadSchedule();
+    if (state.activeTab === "tab-master") syncMasterPainter();
+    if (state.activeTab === "tab-overrides") syncOverridePainter();
+  } catch (err) {
+    showToast("Error restoring settings: " + err.message, "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "⚡ Restore Saved Settings";
+    }
+  }
+}
+
+function setupBackupHandlers() {
+  const fileInput = document.getElementById("input-restore-file");
+  if (fileInput) {
+    fileInput.addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const statusMsg = document.getElementById("restore-status-msg");
+      if (statusMsg) statusMsg.textContent = "Restoring backup...";
+      try {
+        const text = await file.text();
+        const json = JSON.parse(text);
+        const res = await fetch("/api/system/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(json),
+        });
+        const result = await res.json();
+        if (result.success) {
+          showToast(result.message || "Backup restored successfully!");
+          if (statusMsg) statusMsg.textContent = "Restored successfully!";
+          if (json.members) {
+            localStorage.setItem("oth_saved_members", JSON.stringify(json.members));
+          }
+          await loadMembers();
+          await loadSchedule();
+          if (state.activeTab === "tab-master") syncMasterPainter();
+          if (state.activeTab === "tab-overrides") syncOverridePainter();
+          if (state.activeTab === "tab-roster") renderRosterCards();
+        } else {
+          showToast("Restore failed: " + (result.detail || "Invalid format"), "error");
+          if (statusMsg) statusMsg.textContent = "Restore failed.";
+        }
+      } catch (err) {
+        showToast("Error reading backup file: " + err.message, "error");
+        if (statusMsg) statusMsg.textContent = "Error reading file.";
+      }
+      fileInput.value = "";
+    });
+  }
+
+  safeAddListener("btn-restore-cache", "click", restoreSavedSettingsFromCache);
+  safeAddListener("btn-dismiss-recovery", "click", () => {
+    const banner = document.getElementById("recovery-alert");
+    if (banner) banner.style.display = "none";
+  });
+}
+

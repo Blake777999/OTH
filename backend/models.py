@@ -2,6 +2,8 @@ import sqlite3
 import json
 import uuid
 import os
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
@@ -99,11 +101,140 @@ class GoogleSheetConfig(BaseModel):
     auto_sync: bool = False
     last_synced: Optional[str] = None
 
-def get_db_connection() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
+class AppCursor:
+    def __init__(self, raw_cursor, is_pg: bool):
+        self.raw = raw_cursor
+        self.is_pg = is_pg
+
+    def execute(self, sql: str, params=None):
+        if self.is_pg:
+            sql = sql.replace("?", "%s")
+            if "INSERT OR REPLACE INTO app_config" in sql:
+                sql = "INSERT INTO app_config (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+            if params is not None:
+                return self.raw.execute(sql, params)
+            return self.raw.execute(sql)
+        else:
+            if params is not None:
+                return self.raw.execute(sql, params)
+            return self.raw.execute(sql)
+
+    def executemany(self, sql: str, seq_of_params):
+        if self.is_pg:
+            sql = sql.replace("?", "%s")
+            return self.raw.executemany(sql, seq_of_params)
+        return self.raw.executemany(sql, seq_of_params)
+
+    def fetchall(self):
+        return self.raw.fetchall()
+
+    def fetchone(self):
+        return self.raw.fetchone()
+
+    def close(self):
+        return self.raw.close()
+
+class AppDBConnection:
+    def __init__(self, raw_conn, is_pg: bool):
+        self.raw = raw_conn
+        self.is_pg = is_pg
+
+    def cursor(self):
+        if self.is_pg:
+            import psycopg2.extras
+            return AppCursor(self.raw.cursor(cursor_factory=psycopg2.extras.DictCursor), is_pg=True)
+        return AppCursor(self.raw.cursor(), is_pg=False)
+
+    def commit(self):
+        self.raw.commit()
+
+    def rollback(self):
+        self.raw.rollback()
+
+    def close(self):
+        self.raw.close()
+
+def get_db_connection() -> AppDBConnection:
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
+        if "sslmode" not in db_url and ("supabase" in db_url or "neon.tech" in db_url or "render.com" in db_url):
+            sep = "&" if "?" in db_url else "?"
+            db_url = f"{db_url}{sep}sslmode=require"
+        import psycopg2
+        conn = psycopg2.connect(db_url)
+        return AppDBConnection(conn, is_pg=True)
+    else:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        return AppDBConnection(conn, is_pg=False)
+
+def seed_master_from_excel(cursor, excel_path: Path):
+    """Seed master schedule items from avail.xlsx when initializing a fresh database."""
+    try:
+        import openpyxl
+        column_mapping = {
+            "levitt": "Nate", "nate": "Nate", "ethan": "Ethan", "kobi": "Kobi",
+            "jared": "Jared", "blake rosen": "Blake Rosen", "corey": "Corey",
+            "blake cohen": "Blake Cohen", "oliver": "Oliver", "seb": "Sebastian",
+            "sebastian": "Sebastian", "bushy": "Alex", "alex": "Alex",
+            "simon": "Simon", "dylan": "Dylan", "jacob": "Jacob"
+        }
+        cursor.execute("SELECT id, name FROM members")
+        db_members = cursor.fetchall()
+        name_to_id = {r["name"]: r["id"] for r in db_members}
+
+        wb = openpyxl.load_workbook(excel_path)
+        for day_idx, day_name in enumerate(DAYS_OF_WEEK):
+            sheet_candidates = [s for s in wb.sheetnames if day_name.lower() in s.lower() or s.lower() == day_name[:3].lower()]
+            if not sheet_candidates:
+                continue
+            ws = wb[sheet_candidates[0]]
+            is_weekend = day_idx in (5, 6)
+            header_row = 1
+            for r in range(1, 4):
+                val = str(ws.cell(r, 1).value or "").lower()
+                if "free" in val or "not" in val or ws.cell(r, 2).value == "levitt":
+                    header_row = r
+                    break
+            col_to_member = {}
+            for col in range(2, ws.max_column + 1):
+                raw_name = str(ws.cell(header_row, col).value or "").strip().lower()
+                if raw_name in column_mapping:
+                    std_name = column_mapping[raw_name]
+                    if std_name in name_to_id:
+                        col_to_member[col] = (name_to_id[std_name], std_name)
+
+            for col, (mid, mname) in col_to_member.items():
+                busy_slots = []
+                for slot_idx in range(SLOTS_PER_DAY):
+                    row_num = header_row + 1 + slot_idx
+                    cell_val = ws.cell(row_num, col).value
+                    has_x = str(cell_val or "").strip().upper() == "X"
+                    is_busy = has_x if is_weekend else not has_x
+                    if is_busy:
+                        busy_slots.append(slot_idx)
+                if busy_slots:
+                    start = busy_slots[0]
+                    prev = start
+                    for s in busy_slots[1:]:
+                        if s == prev + 1:
+                            prev = s
+                        else:
+                            cursor.execute(
+                                "INSERT INTO master_schedules (id, member_id, day_of_week, start_slot, end_slot, label) VALUES (?, ?, ?, ?, ?, ?)",
+                                (str(uuid.uuid4()), mid, day_idx, start, prev + 1, "Class/Busy")
+                            )
+                            start = s
+                            prev = s
+                    cursor.execute(
+                        "INSERT INTO master_schedules (id, member_id, day_of_week, start_slot, end_slot, label) VALUES (?, ?, ?, ?, ?, ?)",
+                        (str(uuid.uuid4()), mid, day_idx, start, prev + 1, "Class/Busy")
+                    )
+    except Exception as e:
+        print(f"Warning: could not seed master schedule from excel: {e}")
 
 def init_db():
     conn = get_db_connection()
@@ -175,6 +306,15 @@ def init_db():
     if count == 0:
         seed_initial_members(cursor)
         conn.commit()
+
+    # Seed master availability if empty and excel file exists
+    cursor.execute("SELECT COUNT(*) FROM master_schedules")
+    ms_count = cursor.fetchone()[0]
+    if ms_count == 0:
+        excel_path = Path(__file__).resolve().parent.parent / "avail.xlsx"
+        if excel_path.exists():
+            seed_master_from_excel(cursor, excel_path)
+            conn.commit()
         
     conn.close()
 
@@ -406,3 +546,153 @@ def set_config(key: str, value: str):
     cursor.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
     conn.close()
+
+# System & Backup Operations
+def get_db_info() -> Dict[str, Any]:
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        import re
+        safe_url = re.sub(r':([^@]+)@', ':****@', db_url)
+        return {
+            "engine": "postgresql",
+            "persistent": True,
+            "display": "Cloud PostgreSQL (Persistent across spin-ups & upgrades)",
+            "safe_url": safe_url,
+        }
+    return {
+        "engine": "sqlite",
+        "persistent": False,
+        "display": "Local SQLite (Ephemeral on Render free tier)",
+        "path": str(DB_PATH),
+    }
+
+def export_full_backup() -> Dict[str, Any]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, name, email, active, weight, shift_preference, color FROM members ORDER BY name")
+    members = [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "email": r["email"] or "",
+            "active": bool(r["active"]),
+            "weight": float(r["weight"]),
+            "shift_preference": r["shift_preference"],
+            "color": r["color"],
+        }
+        for r in cursor.fetchall()
+    ]
+
+    cursor.execute("SELECT id, member_id, day_of_week, start_slot, end_slot, label FROM master_schedules ORDER BY day_of_week, start_slot")
+    master_schedules = [
+        {
+            "id": r["id"],
+            "member_id": r["member_id"],
+            "day_of_week": int(r["day_of_week"]),
+            "start_slot": int(r["start_slot"]),
+            "end_slot": int(r["end_slot"]),
+            "label": r["label"] or "Busy",
+        }
+        for r in cursor.fetchall()
+    ]
+
+    cursor.execute("SELECT id, week_id, member_id, day_of_week, start_slot, end_slot, override_type, note FROM weekly_overrides ORDER BY week_id, day_of_week, start_slot")
+    weekly_overrides = [
+        {
+            "id": r["id"],
+            "week_id": r["week_id"],
+            "member_id": r["member_id"],
+            "day_of_week": int(r["day_of_week"]),
+            "start_slot": int(r["start_slot"]),
+            "end_slot": int(r["end_slot"]),
+            "override_type": r["override_type"],
+            "note": r["note"] or "",
+        }
+        for r in cursor.fetchall()
+    ]
+
+    cursor.execute("SELECT id, week_id, day_of_week, slot, house, member_id FROM schedules ORDER BY week_id, day_of_week, slot, house")
+    schedules = [
+        {
+            "id": r["id"],
+            "week_id": r["week_id"],
+            "day_of_week": int(r["day_of_week"]),
+            "slot": int(r["slot"]),
+            "house": r["house"],
+            "member_id": r["member_id"],
+        }
+        for r in cursor.fetchall()
+    ]
+
+    cursor.execute("SELECT key, value FROM app_config")
+    app_config = {r["key"]: r["value"] for r in cursor.fetchall()}
+    conn.close()
+
+    return {
+        "app": "Old Town Hours",
+        "version": 1,
+        "exported_at": datetime.now().isoformat(),
+        "counts": {
+            "members": len(members),
+            "master_schedules": len(master_schedules),
+            "weekly_overrides": len(weekly_overrides),
+            "schedules": len(schedules),
+        },
+        "members": members,
+        "master_schedules": master_schedules,
+        "weekly_overrides": weekly_overrides,
+        "schedules": schedules,
+        "app_config": app_config,
+    }
+
+def import_full_backup(data: Dict[str, Any]) -> Dict[str, Any]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM schedules")
+        cursor.execute("DELETE FROM weekly_overrides")
+        cursor.execute("DELETE FROM master_schedules")
+        cursor.execute("DELETE FROM members")
+        cursor.execute("DELETE FROM app_config")
+
+        for m in data.get("members", []):
+            cursor.execute(
+                "INSERT INTO members (id, name, email, active, weight, shift_preference, color) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (m["id"], m["name"], m.get("email", ""), 1 if m.get("active") else 0, m.get("weight", 1.0), m.get("shift_preference", "daily_short"), m.get("color", "#2563EB"))
+            )
+        for ms in data.get("master_schedules", []):
+            cursor.execute(
+                "INSERT INTO master_schedules (id, member_id, day_of_week, start_slot, end_slot, label) VALUES (?, ?, ?, ?, ?, ?)",
+                (ms["id"], ms["member_id"], ms["day_of_week"], ms["start_slot"], ms["end_slot"], ms.get("label", "Busy"))
+            )
+        for wo in data.get("weekly_overrides", []):
+            cursor.execute(
+                "INSERT INTO weekly_overrides (id, week_id, member_id, day_of_week, start_slot, end_slot, override_type, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (wo["id"], wo["week_id"], wo["member_id"], wo["day_of_week"], wo["start_slot"], wo["end_slot"], wo.get("override_type", "busy"), wo.get("note", ""))
+            )
+        for s in data.get("schedules", []):
+            cursor.execute(
+                "INSERT INTO schedules (id, week_id, day_of_week, slot, house, member_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (s.get("id", str(uuid.uuid4())), s["week_id"], s["day_of_week"], s["slot"], s["house"], s["member_id"])
+            )
+        for k, v in data.get("app_config", {}).items():
+            cursor.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (k, v))
+
+        conn.commit()
+        return {
+            "success": True,
+            "message": f"Successfully restored {len(data.get('members', []))} members, {len(data.get('master_schedules', []))} master blocks, {len(data.get('weekly_overrides', []))} overrides, {len(data.get('schedules', []))} slot assignments.",
+            "counts": {
+                "members": len(data.get("members", [])),
+                "master_schedules": len(data.get("master_schedules", [])),
+                "weekly_overrides": len(data.get("weekly_overrides", [])),
+                "schedules": len(data.get("schedules", [])),
+            }
+        }
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
