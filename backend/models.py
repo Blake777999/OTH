@@ -286,10 +286,15 @@ def init_db():
         slot INTEGER NOT NULL,
         house TEXT NOT NULL,
         member_id TEXT NOT NULL,
-        FOREIGN KEY (member_id) REFERENCES members (id) ON DELETE CASCADE,
         UNIQUE(week_id, day_of_week, slot, house)
     )
     """)
+    
+    if conn.is_pg:
+        try:
+            cursor.execute("ALTER TABLE schedules DROP CONSTRAINT IF EXISTS schedules_member_id_fkey")
+        except Exception:
+            pass
     
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS app_config (
@@ -489,10 +494,14 @@ def save_schedule(week_id: str, assignments: List[ScheduleSlotAssignment]):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM schedules WHERE week_id = ?", (week_id,))
-    for a in assignments:
-        cursor.execute(
+    to_insert = [
+        (str(uuid.uuid4()), week_id, a.day_of_week, a.slot, a.house, a.member_id)
+        for a in assignments
+    ]
+    if to_insert:
+        cursor.executemany(
             "INSERT INTO schedules (id, week_id, day_of_week, slot, house, member_id) VALUES (?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), week_id, a.day_of_week, a.slot, a.house, a.member_id)
+            to_insert
         )
     conn.commit()
     conn.close()

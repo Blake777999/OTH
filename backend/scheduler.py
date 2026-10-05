@@ -27,7 +27,7 @@ class ScheduleOptimizer:
         previous_schedule: Optional[List[ScheduleSlotAssignment]] = None,
         min_shift_slots: int = 2,  # Minimum 1 hour (2 thirty-minute slots)
         max_daily_slots: int = 10, # Max 5 hours in a single day
-        time_limit_seconds: float = 30.0,
+        time_limit_seconds: float = 20.0,
     ):
         self.members = [m for m in members if m.active]
         self.num_members = len(self.members)
@@ -365,7 +365,7 @@ class ScheduleOptimizer:
         # Solve
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.time_limit_seconds
-        solver.parameters.num_workers = 8
+        solver.parameters.num_workers = 4
         status = solver.Solve(model)
 
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
@@ -561,7 +561,7 @@ class ScheduleOptimizer:
         model.Minimize(sum(dev_terms) + sum(unfilled_penalties) + sum(fallback_split_penalties) + sum(fallback_switch_penalties))
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.time_limit_seconds
-        solver.parameters.num_workers = 8
+        solver.parameters.num_workers = 4
         status = solver.Solve(model)
 
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):

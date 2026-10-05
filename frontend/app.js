@@ -899,17 +899,23 @@ async function runScheduleGeneration() {
         min_shift_hours: minShiftHours,
       }),
     });
-    const result = await res.json();
+    let result = null;
+    try {
+      result = await res.json();
+    } catch (e) {
+      result = null;
+    }
 
-    if (result.success) {
+    if (res.ok && result && result.success) {
       showToast(`Generated optimal schedule for ${state.currentWeekId}! Fairness: ${result.stats.fairness_score}%`);
       closeGenerateModal();
       await loadSchedule();
     } else {
-      showToast(`Generation failed: ${result.message || 'Conflicts detected'}`, "error");
+      const msg = (result && (result.detail || result.message)) || `Server returned ${res.statusText || res.status}`;
+      showToast(`Generation failed: ${msg}`, "error");
     }
   } catch (err) {
-    showToast("Error connecting to optimization server", "error");
+    showToast(`Network error: ${err.message || 'Could not reach server'}`, "error");
   } finally {
     btn.disabled = false;
     btn.innerHTML = "<span>🚀</span> Run Optimizer";
