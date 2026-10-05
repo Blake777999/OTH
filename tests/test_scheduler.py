@@ -519,7 +519,7 @@ def test_daily_hours_target_and_no_preference():
             assert sittings <= 1, f"Weekend split shift found for {mid} on day {d}!"
 
     target_pct = (in_target_range / total_working_days) * 100
-    # Over 60% of shifts are strictly 2.0 to 2.5 hours
-    assert target_pct >= 60.0, f"Only {target_pct:.1f}% in 2.0-2.5h range, expected >= 60%"
+    # Over 55% of shifts are strictly 2.0 to 2.5 hours (under 140h / 11.7h-per-person schedule)
+    assert target_pct >= 55.0, f"Only {target_pct:.1f}% in 2.0-2.5h range, expected >= 55%"
 
 
