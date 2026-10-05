@@ -207,6 +207,7 @@ def seed_master_from_excel(cursor, excel_path: Path):
                     if std_name in name_to_id:
                         col_to_member[col] = (name_to_id[std_name], std_name)
 
+            to_insert = []
             for col, (mid, mname) in col_to_member.items():
                 busy_slots = []
                 for slot_idx in range(SLOTS_PER_DAY):
@@ -223,16 +224,15 @@ def seed_master_from_excel(cursor, excel_path: Path):
                         if s == prev + 1:
                             prev = s
                         else:
-                            cursor.execute(
-                                "INSERT INTO master_schedules (id, member_id, day_of_week, start_slot, end_slot, label) VALUES (?, ?, ?, ?, ?, ?)",
-                                (str(uuid.uuid4()), mid, day_idx, start, prev + 1, "Class/Busy")
-                            )
+                            to_insert.append((str(uuid.uuid4()), mid, day_idx, start, prev + 1, "Class/Busy"))
                             start = s
                             prev = s
-                    cursor.execute(
-                        "INSERT INTO master_schedules (id, member_id, day_of_week, start_slot, end_slot, label) VALUES (?, ?, ?, ?, ?, ?)",
-                        (str(uuid.uuid4()), mid, day_idx, start, prev + 1, "Class/Busy")
-                    )
+                    to_insert.append((str(uuid.uuid4()), mid, day_idx, start, prev + 1, "Class/Busy"))
+            if to_insert:
+                cursor.executemany(
+                    "INSERT INTO master_schedules (id, member_id, day_of_week, start_slot, end_slot, label) VALUES (?, ?, ?, ?, ?, ?)",
+                    to_insert
+                )
     except Exception as e:
         print(f"Warning: could not seed master schedule from excel: {e}")
 
