@@ -368,13 +368,54 @@ class ScheduleOptimizer:
         solver.parameters.num_workers = 4
         status = solver.Solve(model)
 
-        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            # If constrained too tightly (e.g. strict min shift or strict availability), try fallback relaxation
-            return self._solve_relaxed_fallback(avail)
+        status = solver.Solve(model)
 
-        # Extract Results
+        result = None
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            assignments, unfilled_details = self._extract_assignments(solver, x)
+            stats = self._compute_stats(assignments, prev_work_set, target_slots)
+            # If coverage meets or exceeds 90%, adopt primary result
+            if stats["coverage_pct"] >= 90.0:
+                result = {
+                    "success": True,
+                    "status": solver.StatusName(status),
+                    "assignments": assignments,
+                    "stats": stats,
+                    "warnings": [],
+                }
+
+        # If primary solve was infeasible OR coverage fell below 90%:
+        # Run Max-Coverage Rule-Breaking Fallback to fill as many slots as possible
+        if result is None:
+            result = self._solve_max_coverage_fallback(avail, prev_work_set, target_slots)
+
+        if not result["success"]:
+            return result
+
+        # Final Mandatory Pass: Unfilled slots should TRULY only be there if no one is free!
+        # If any slot is currently unfilled but someone is actually free and eligible, fill it!
+        filled_gaps = self._fill_unfilled_gaps(result["assignments"], avail)
+        if filled_gaps > 0:
+            result["warnings"].append(f"Filled {filled_gaps} extra slot(s) by allocating available members.")
+
+        # Recompute final stats and warnings with the completed assignments
+        result["stats"] = self._compute_stats(result["assignments"], prev_work_set, target_slots)
+        unfilled_count = result["stats"]["unfilled_slots_count"]
+        unfilled_details = [
+            f"{DAYS_OF_WEEK[a.day_of_week]} {slot_to_time_str(a.slot)} ({a.house})"
+            for a in result["assignments"] if a.member_id == "UNFILLED"
+        ]
+        if unfilled_count > 0:
+            preview = ", ".join(unfilled_details[:4])
+            if len(unfilled_details) > 4:
+                preview += f" (+{len(unfilled_details) - 4} more)"
+            result["warnings"].append(f"{unfilled_count} slot(s) could not be filled because NO ONE on the team is available: {preview}")
+
+        return result
+
+    def _extract_assignments(self, solver, x):
+        """Extract assignments and unfilled details from a solved CP-SAT model."""
         assignments = []
-        unfilled_count = 0
         unfilled_details = []
         for d in range(self.days):
             for s in range(self.slots):
@@ -398,8 +439,6 @@ class ScheduleOptimizer:
                             )
                         )
                     else:
-                        # Slot cannot be filled due to conflicts - mark with X!
-                        unfilled_count += 1
                         time_label = slot_to_time_str(s)
                         day_name = DAYS_OF_WEEK[d]
                         unfilled_details.append(f"{day_name} {time_label} ({house})")
@@ -413,33 +452,75 @@ class ScheduleOptimizer:
                                 color="#DC2626",
                             )
                         )
+        return assignments, unfilled_details
 
-        # Compute Statistics
-        stats = self._compute_stats(assignments, prev_work_set, target_slots)
-        warnings = []
-        if unfilled_count > 0:
-            preview = ", ".join(unfilled_details[:4])
-            if len(unfilled_details) > 4:
-                preview += f" (+{len(unfilled_details) - 4} more)"
-            warnings.append(f"{unfilled_count} slot(s) could not be filled due to everyone being busy: {preview}")
+    def _fill_unfilled_gaps(self, assignments: List[ScheduleSlotAssignment], avail: Dict[Tuple[int, int, int], bool]) -> int:
+        """
+        Final safety guarantee: unfilled slots should TRULY only be there if no one is free!
+        Inspects every unfilled slot and fills it if any eligible member is available and not working at the other house.
+        """
+        filled_count = 0
+        for a in assignments:
+            if a.member_id == "UNFILLED":
+                d, s, h = a.day_of_week, a.slot, a.house
+                other_h = "Burn" if h == "THC" else "THC"
+                other_m = next((x.member_id for x in assignments if x.day_of_week == d and x.slot == s and x.house == other_h), None)
 
-        return {
-            "success": True,
-            "status": solver.StatusName(status),
-            "assignments": assignments,
-            "stats": stats,
-            "warnings": warnings,
-        }
+                candidates = []
+                for m in self.members:
+                    m_idx = self.member_id_to_idx[m.id]
+                    if avail[(m_idx, d, s)] and m.id != other_m:
+                        candidates.append(m)
 
-    def _solve_relaxed_fallback(self, avail) -> Dict[str, Any]:
-        """Fallback solver with relaxed constraints if availability conflicts are very tight."""
+                if candidates:
+                    # Score candidates: prefer adjacent slot at same house, then lowest hours
+                    best_c = None
+                    best_score = -999999
+                    for c in candidates:
+                        score = 0
+                        # Check adjacent slots at same house
+                        has_adj = any(x.member_id == c.id and x.day_of_week == d and x.house == h and abs(x.slot - s) == 1 for x in assignments)
+                        if has_adj:
+                            score += 1000
+                        # Bonus for having worked on that day
+                        worked_today = sum(1 for x in assignments if x.member_id == c.id and x.day_of_week == d)
+                        if worked_today < 10:
+                            score += 200
+                        elif worked_today >= 14:
+                            score -= 2000
+                        # Fairness penalty on total hours worked
+                        tot = sum(1 for x in assignments if x.member_id == c.id)
+                        score -= tot * 20
+                        if score > best_score:
+                            best_score = score
+                            best_c = c
+
+                    if best_c:
+                        a.member_id = best_c.id
+                        a.member_name = best_c.name
+                        a.color = best_c.color
+                        filled_count += 1
+
+        return filled_count
+
+    def _solve_max_coverage_fallback(self, avail, prev_work_set=None, target_slots=None) -> Dict[str, Any]:
+        """
+        Max-Coverage Rule-Breaking Solver:
+        When standard rules result in poor coverage (< 90%) or infeasibility,
+        this pass relaxes constraints (allowing house switching, split shifts,
+        extending daily hours, and allowing available members to take extra shifts)
+        to maximize house coverage.
+        """
+        prev_work_set = prev_work_set or set()
+        target_slots = target_slots or {m: self.total_demand_slots // max(1, self.num_members) for m in range(self.num_members)}
+
         model = cp_model.CpModel()
         x = {}
         for m in range(self.num_members):
             for d in range(self.days):
                 for s in range(self.slots):
                     for h in range(self.num_houses):
-                        x[m, d, s, h] = model.NewBoolVar(f"rel_x_{m}_{d}_{s}_{h}")
+                        x[m, d, s, h] = model.NewBoolVar(f"mc_x_{m}_{d}_{s}_{h}")
 
         unfilled = {}
         unfilled_penalties = []
@@ -449,19 +530,19 @@ class ScheduleOptimizer:
         for d in range(self.days):
             for s in range(self.slots):
                 for h in range(self.num_houses):
-                    unf = model.NewBoolVar(f"rel_unf_{d}_{s}_{h}")
+                    unf = model.NewBoolVar(f"mc_unf_{d}_{s}_{h}")
                     unfilled[d, s, h] = unf
                     model.Add(sum(x[m, d, s, h] for m in range(self.num_members)) + unf == 1)
-                    # THC has higher penalty to leave unfilled in fallback (Minimize objective)
-                    penalty_weight = 105000 if h == thc_idx else 100000
-                    unfilled_penalties.append(penalty_weight * unf)
+                    # Astronomical penalty for unfilled slots (coverage above all rules!)
+                    weight = 1050000 if h == thc_idx else 1000000
+                    unfilled_penalties.append(weight * unf)
 
-                # If only one person is free for a given slot, give them to THC
                 avail_at_slot = sum(1 for m in range(self.num_members) if avail[(m, d, s)])
                 if avail_at_slot == 1:
                     for m in range(self.num_members):
                         model.Add(x[m, d, s, burn_idx] == 0)
 
+        # Basic physics constraints
         for m in range(self.num_members):
             for d in range(self.days):
                 for s in range(self.slots):
@@ -470,163 +551,60 @@ class ScheduleOptimizer:
                         for h in range(self.num_houses):
                             model.Add(x[m, d, s, h] == 0)
 
-        # Anti-fragmentation per house and forbid adjacent house switching in fallback
-        rel_is_working = {}
+        # Soft preferences (penalties) so the solver still produces clean schedules if possible
+        soft_penalties = []
         for m in range(self.num_members):
             for d in range(self.days):
-                for s in range(self.slots):
-                    rel_is_working[m, d, s] = model.NewBoolVar(f"rel_work_{m}_{d}_{s}")
-                    model.Add(rel_is_working[m, d, s] == sum(x[m, d, s, h] for h in range(self.num_houses)))
-
-        for m in range(self.num_members):
-            for d in range(self.days):
-                for h in range(self.num_houses):
-                    model.Add(x[m, d, 0, h] <= x[m, d, 1, h])
-                    model.Add(x[m, d, self.slots - 1, h] <= x[m, d, self.slots - 2, h])
-                    for s in range(1, self.slots - 1):
-                        model.Add(x[m, d, s, h] <= x[m, d, s - 1, h] + x[m, d, s + 1, h])
-                for s in range(1, self.slots):
-                    model.Add(x[m, d, s - 1, 0] + x[m, d, s, 1] <= 1)
-                    model.Add(x[m, d, s - 1, 1] + x[m, d, s, 0] <= 1)
-
-        fallback_split_penalties = []
-        fallback_switch_penalties = []
-        for m in range(self.num_members):
-            for d in range(self.days):
-                # Daily max hours cap
                 day_slots = sum(x[m, d, s, h] for s in range(self.slots) for h in range(self.num_houses))
-                model.Add(day_slots <= self.max_daily_slots)
+                # Cap at 14 slots (7 hours) to prevent physical exhaustion, but softly penalize > 10 slots
+                model.Add(day_slots <= 14)
+                over_10 = model.NewIntVar(0, 14, f"mc_ov10_{m}_{d}")
+                model.Add(over_10 >= day_slots - 10)
+                soft_penalties.append(500 * over_10)
 
-                # Max continuous stint at any house <= 6 slots (3 hours)
-                for h in range(self.num_houses):
-                    for s in range(self.slots - 6):
-                        model.Add(sum(x[m, d, s + k, h] for k in range(7)) <= 6)
-
-                # Minimum 5-hour gap between houses
-                for s1 in range(self.slots):
-                    for s2 in range(s1 + 1, min(self.slots, s1 + 10)):
-                        model.Add(x[m, d, s1, 0] + x[m, d, s2, 1] <= 1)
-                        model.Add(x[m, d, s1, 1] + x[m, d, s2, 0] <= 1)
-
-                w_burn = model.NewBoolVar(f"rel_wb_{m}_{d}")
-                w_thc = model.NewBoolVar(f"rel_wt_{m}_{d}")
+                # Soft penalty for working both houses on same day (rule broken if needed)
+                w_burn = model.NewBoolVar(f"mc_wb_{m}_{d}")
+                w_thc = model.NewBoolVar(f"mc_wt_{m}_{d}")
                 model.Add(sum(x[m, d, s, 0] for s in range(self.slots)) <= self.slots * w_burn)
                 model.Add(sum(x[m, d, s, 1] for s in range(self.slots)) <= self.slots * w_thc)
-                both_houses = model.NewBoolVar(f"rel_both_{m}_{d}")
-                model.Add(w_burn + w_thc - 1 <= both_houses)
-                fallback_switch_penalties.append(150 * both_houses)
+                both_h = model.NewBoolVar(f"mc_both_{m}_{d}")
+                model.Add(w_burn + w_thc - 1 <= both_h)
+                soft_penalties.append(250 * both_h)
 
-                starts = []
-                s0 = model.NewBoolVar(f"rel_st_{m}_{d}_0")
-                model.Add(s0 == rel_is_working[m, d, 0])
-                starts.append(s0)
-                for s in range(1, self.slots):
-                    st = model.NewBoolVar(f"rel_st_{m}_{d}_{s}")
-                    model.Add(st >= rel_is_working[m, d, s] - rel_is_working[m, d, s - 1])
-                    starts.append(st)
-                num_starts = sum(starts)
-                sec_shift = model.NewIntVar(0, self.slots, f"rel_sec_{m}_{d}")
-                model.Add(sec_shift >= num_starts - 1)
-                fallback_split_penalties.append(100 * sec_shift)
-
-        # Strictly bounded fair share in fallback solver
-        unavoidable_unfilled = 0
-        for d in range(self.days):
-            for s in range(self.slots):
-                avail_at_slot = sum(1 for m in range(self.num_members) if avail[(m, d, s)])
-                if avail_at_slot < self.num_houses:
-                    unavoidable_unfilled += (self.num_houses - avail_at_slot)
-
-        effective_demand = max(0, self.total_demand_slots - unavoidable_unfilled)
-        fair_floor = effective_demand // self.num_members
-        fair_ceil = (effective_demand + self.num_members - 1) // self.num_members
-        avail_count = {
-            m: sum(1 for d in range(self.days) for s in range(self.slots) if avail[(m, d, s)])
-            for m in range(self.num_members)
-        }
-        fallback_floor = max(0, fair_floor - 2)
-        fallback_ceil = min(self.total_demand_slots, fair_ceil + 2)
-        dev_terms = []
+        # Soft fairness deviation
         for m in range(self.num_members):
             actual = sum(x[m, d, s, h] for d in range(self.days) for s in range(self.slots) for h in range(self.num_houses))
-            if avail_count[m] >= fallback_floor:
-                model.Add(actual >= min(fallback_floor, avail_count[m]))
-                model.Add(actual <= fallback_ceil)
-            diff = model.NewIntVar(-self.total_demand_slots, self.total_demand_slots, f"diff_{m}")
-            model.Add(diff == actual - fair_floor)
-            abs_diff = model.NewIntVar(0, self.total_demand_slots, f"abs_{m}")
-            model.AddAbsEquality(abs_diff, diff)
-            dev_terms.append(abs_diff)
+            t = target_slots.get(m, self.total_demand_slots // max(1, self.num_members))
+            diff = model.NewIntVar(-self.total_demand_slots, self.total_demand_slots, f"mc_diff_{m}")
+            model.Add(diff == actual - t)
+            abs_d = model.NewIntVar(0, self.total_demand_slots, f"mc_abs_{m}")
+            model.AddAbsEquality(abs_d, diff)
+            soft_penalties.append(50 * abs_d)
 
-        model.Minimize(sum(dev_terms) + sum(unfilled_penalties) + sum(fallback_split_penalties) + sum(fallback_switch_penalties))
+        model.Minimize(sum(unfilled_penalties) + sum(soft_penalties))
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.time_limit_seconds
         solver.parameters.num_workers = 4
         status = solver.Solve(model)
 
-        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            assignments, unfilled_details = self._extract_assignments(solver, x)
+            stats = self._compute_stats(assignments, prev_work_set, target_slots)
+            return {
+                "success": True,
+                "status": f"MAX_COVERAGE_{solver.StatusName(status)}",
+                "assignments": assignments,
+                "stats": stats,
+                "warnings": ["Generated using Max-Coverage fallback (relaxing rules to fill as many slots as possible)."],
+            }
+        else:
             return {
                 "success": False,
                 "status": "INFEASIBLE",
                 "assignments": [],
                 "stats": {},
-                "warnings": ["Could not satisfy schedule coverage due to severe member schedule conflicts."],
+                "warnings": ["Could not satisfy schedule coverage."],
             }
-
-        assignments = []
-        unfilled_count = 0
-        unfilled_details = []
-        for d in range(self.days):
-            for s in range(self.slots):
-                for h_idx, house in enumerate(self.houses):
-                    assigned_m = None
-                    for m_idx in range(self.num_members):
-                        if solver.Value(x[m_idx, d, s, h_idx]) == 1:
-                            assigned_m = m_idx
-                            break
-                    if assigned_m is not None:
-                        member = self.idx_to_member[assigned_m]
-                        assignments.append(
-                            ScheduleSlotAssignment(
-                                day_of_week=d,
-                                slot=s,
-                                house=house,
-                                member_id=member.id,
-                                member_name=member.name,
-                                color=member.color,
-                            )
-                        )
-                    else:
-                        unfilled_count += 1
-                        time_label = slot_to_time_str(s)
-                        day_name = DAYS_OF_WEEK[d]
-                        unfilled_details.append(f"{day_name} {time_label} ({house})")
-                        assignments.append(
-                            ScheduleSlotAssignment(
-                                day_of_week=d,
-                                slot=s,
-                                house=house,
-                                member_id="UNFILLED",
-                                member_name="❌ X (UNFILLED)",
-                                color="#DC2626",
-                            )
-                        )
-
-        stats = self._compute_stats(assignments, set(), {m: fair_floor for m in range(self.num_members)})
-        fallback_warnings = ["Generated with relaxed constraints to resolve tight availability conflicts."]
-        if unfilled_count > 0:
-            preview = ", ".join(unfilled_details[:4])
-            if len(unfilled_details) > 4:
-                preview += f" (+{len(unfilled_details) - 4} more)"
-            fallback_warnings.append(f"{unfilled_count} slot(s) could not be filled due to everyone being busy: {preview}")
-
-        return {
-            "success": True,
-            "status": "RELAXED_FEASIBLE",
-            "assignments": assignments,
-            "stats": stats,
-            "warnings": fallback_warnings,
-        }
 
     def _compute_stats(
         self,
